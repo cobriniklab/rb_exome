@@ -1,0 +1,959 @@
+---
+title: "stchlk_exome_annotation.Rmd"
+author: "Kevin Stachelek"
+date: "1/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+load rb datasets. Keep in mind that only samples c("24-T", "28-C", "28-T", "29-T", "29-C", "31-T", "31-C", "41-C", "46-T", "46-C", "48-T", "48-C") have ready rb variants detected 
+
+# load required libraries
+
+```{r load_req_libs, warning=FALSE, include = F}
+dt <- format(Sys.time(), "%Y%m%d")
+library(stchlk.exome)
+library(dplyr)
+library(data.table)
+suppressMessages(library(EnsDb.Hsapiens.v86))
+edb <- EnsDb.Hsapiens.v86
+library(S4Vectors)
+library(purrr)
+library(ensemblVEP)
+library(plyranges)
+library(dplyr)
+library(ggplot2)
+
+```
+
+# load useful functions
+```{r}
+
+# split mutect2 variant list into sample type dataframe list
+split_m2_vars <- function(m2_vars, m2_filt_variant_paths = NULL){
+
+  sample_types <- c("reynolds_CL", "vc_CL", "vc_T")
+  sample_type_regexes <- c("^[[:digit:]]{3}-CL", "^[[:digit:]]{2}-CL", "[[:digit:]]-T" )
+  
+  m2_var_list <- purrr::map(sample_type_regexes, function(x) dplyr::filter(m2_vars, grepl(x, sample)))
+  
+  # purrr::map2(m2_var_list, m2_filt_variant_paths, write.table, sep = "\t")
+  
+  names(m2_var_list) <- sample_types
+  
+  return(m2_var_list)
+  
+  
+}
+
+collate_vcfs <- function (vcf_list, tidy_function, datatype){
+  # browser()
+    
+    evcf_list <- lapply(vcf_list, function(x) {
+        tidy_function(x, datatype)
+    })
+
+    tidy_vcfs <- dplyr::bind_rows(evcf_list, .id = "sample")
+    rfp_input <- dplyr::select(data.frame(tidy_vcfs), chrom = seqnames, 
+        pos = start, ref = REF, alt = ALT) %>% dplyr::mutate(chrom = gsub("chr", 
+        "", chrom))
+    rfp0 <- rfPred::rfPred_scores(variant_list = rfp_input, data = "~/rb_pipeline/bin/all_chr_rfPred.txtz", 
+        index = "~/rb_pipeline/bin/all_chr_rfPred.txtz.tbi", 
+        all.col = TRUE)
+    rfp0 <- dplyr::mutate(rfp0, chromosome = paste0("chr", chromosome))
+    tidy_vcfs <- dplyr::left_join(tidy_vcfs, rfp0, by = c(seqnames = "chromosome", 
+        start = "position_hg19", REF = "reference", ALT = "alteration"))
+}
+
+mutect2_tidy <- function(my_vcf, datatype){
+  # browser()
+  evcf <- VariantAnnotation::expand(x = my_vcf, row.names = TRUE)
+  
+  csq <- ensemblVEP::parseCSQToGRanges(evcf)
+  evcf <- evcf[names(csq)]
+  df_all <- data.frame(SummarizedExperiment::rowRanges(evcf), 
+      mcols(csq),  GT = VariantAnnotation::geno(evcf)$GT, AF = VariantAnnotation::geno(evcf)$AF, 
+        AD = VariantAnnotation::geno(evcf)$AD, gnomad.AF = VariantAnnotation::info(evcf)$gno_af_all,
+        VT = VariantAnnotation::info(evcf)$VariantType)
+  if (datatype == "pon"){
+    ncp <- ncol(df_all)
+    colnames(df_all)[(ncp-5):(ncp-2)] <- c("GT.TUMOR", "AF.TUMOR", "AD.TUMOR.1", "AD.TUMOR.2")
+  }
+  df_all <- tibble::rownames_to_column(df_all, "snp_id")
+  variants <- dplyr::group_by(df_all, seqnames, start, end)
+  variants <- dplyr::filter(variants, row_number() == 1)
+  variants <- dplyr::ungroup(variants)
+  return(variants)
+}
+
+strelka_tidy_snvs <- function (my_vcf) {
+    csq <- ensemblVEP::parseCSQToGRanges(my_vcf)
+    my_vcf <- my_vcf[names(csq)]
+    evcf <- S4Vectors::expand(my_vcf)
+    df_all <- data.frame(SummarizedExperiment::rowRanges(evcf), 
+        mcols(csq), AU = VariantAnnotation::geno(evcf)$AU, CU = VariantAnnotation::geno(evcf)$CU, 
+        GU = VariantAnnotation::geno(evcf)$GU, TU = VariantAnnotation::geno(evcf)$TU,
+        gnomad.AF = VariantAnnotation::info(evcf)$gno_af_all)
+    df_all <- tibble::rownames_to_column(df_all, "snp_id")
+    variants <- dplyr::group_by(df_all, seqnames, start, end)
+    variants <- dplyr::filter(variants, row_number() == 1)
+    variants <- dplyr::ungroup(variants)
+}
+
+strelka_tidy_indels <- function(my_vcf){
+    evcf <- VariantAnnotation::expand(x = my_vcf, row.names = TRUE)
+  
+  csq <- ensemblVEP::parseCSQToGRanges(evcf)
+  evcf <- evcf[names(csq)]
+  df_all <- data.frame(SummarizedExperiment::rowRanges(evcf), 
+      mcols(csq), TAR = geno(evcf)$TAR, TIR = geno(evcf)$TIR,
+      gnomad.AF = VariantAnnotation::info(evcf)$gno_af_all)
+    df_all <- tibble::rownames_to_column(df_all, "snp_id")
+    variants <- dplyr::group_by(df_all, seqnames, start, end)
+    variants <- dplyr::filter(variants, row_number() == 1)
+    variants <- dplyr::ungroup(variants)
+}
+
+retidy_strelka_snvs <- function(variantdf){
+
+  variantdf[,"ALT.1"]  <- NULL
+  
+  variantdf <- variantdf %>% 
+      dplyr::mutate(AD.TUMOR.1 = case_when(
+      REF == "C" ~ CU.TUMOR.1,
+      REF == "G" ~ GU.TUMOR.1,
+      REF == "T" ~ TU.TUMOR.1,
+      REF == "A" ~ AU.TUMOR.1)) %>%
+      dplyr::mutate(AD.NORMAL.1 = case_when(
+      REF == "C" ~ CU.NORMAL.1,
+      REF == "G" ~ GU.NORMAL.1,
+      REF == "T" ~ TU.NORMAL.1,
+      REF == "A" ~ AU.NORMAL.1)) %>%
+      dplyr::mutate(AD.TUMOR.2 = case_when(
+      ALT == "C" ~ CU.TUMOR.1,
+      ALT == "G" ~ GU.TUMOR.1,
+      ALT == "T" ~ TU.TUMOR.1,
+      ALT == "A" ~ AU.TUMOR.1)) %>%
+      dplyr::mutate(AD.NORMAL.2= case_when(
+      ALT == "C" ~ CU.NORMAL.1,
+      ALT == "G" ~ GU.NORMAL.1,
+      ALT == "T" ~ TU.NORMAL.1,
+      ALT == "A" ~ AU.NORMAL.1)) %>%
+      dplyr::mutate(AF.TUMOR = AD.TUMOR.2 / (AD.TUMOR.1 + AD.TUMOR.2)) %>%
+      dplyr::mutate(AF.NORMAL = AD.NORMAL.2 / (AD.NORMAL.1 + AD.NORMAL.2)) %>%
+      identity()
+
+return(variantdf)
+}
+
+retidy_strelka_indels <- function(variantdf){
+  
+  variantdf <- variantdf %>% 
+    dplyr::mutate(AD.TUMOR.2 = TIR.TUMOR.1, AD.TUMOR.1 = TAR.TUMOR.1) %>% 
+    dplyr::mutate(AD.NORMAL.2 = TIR.NORMAL.1, AD.NORMAL.1 = TAR.NORMAL.1) %>% 
+    dplyr::mutate(AF.TUMOR = AD.TUMOR.2 / (AD.TUMOR.1 + AD.TUMOR.2)) %>% 
+    dplyr::mutate(AF.NORMAL = AD.NORMAL.2 / (AD.NORMAL.1+  AD.NORMAL.2)) %>% 
+    identity()
+
+return(variantdf)
+}
+
+pon_subtract_m2_vars <- function (my_variants, my_pon) {
+
+      my_pon <- dplyr::filter(my_pon, AF.TUMOR > 0.35)
+      
+      variants <- my_variants %>% 
+        anti_join(my_pon, by = c("seqnames", "start", "end", "REF", "ALT", "GT.TUMOR")) %>% 
+        identity()
+      
+      return(variants)
+}
+
+filter_calls  <- function (my_variants) {
+
+  my_variants <- dplyr::arrange(my_variants, desc(AF.TUMOR)) %>%
+    dplyr::group_by(sample, snp_id) %>% 
+    dplyr::filter(row_number() == (1)) %>% 
+    dplyr::mutate(path_meta_score = ifelse(SIFT_score >= 0.5, 1, 0) + ifelse(Polyphen2_score >= 0.5, 1, 0) + ifelse(MutationTaster_score >= 0.5, 1, 0) + ifelse(LRT_score >= 0.5, 1, 0)) %>% 
+    # dplyr::filter(FILTER == "PASS" ) %>% # filter out variants which don't meet variant caller filtering criteria
+    dplyr::filter(!grepl(paste(c("intron_variant", "synonymous"), collapse="|"), Consequence)) %>% # filter out variants that are intronic or synonymous
+    dplyr::filter(AF.TUMOR > 0.05) %>% # filter out variants with a tumor variant allele frequency less than 5 percent
+    dplyr::filter(AD.TUMOR.2 > 5) %>% # filter out variants with a tumor alternate allele read depth less than 5
+    # dplyr::filter(gnomad.AF.value < 0.01 | is.na(gnomad.AF.value)) %>%  # filter out variants with a gnomad frequency greater than one percent
+    # dplyr::filter(AF.TUMOR > 0.1) %>% # filter out variants with a tumor variant allele frequency less than 10 percent
+    # dplyr::filter(AD.TUMOR.2 > 10) %>% # filter out variants with a tumor alternate allele read depth less than 10
+    dplyr::filter(AD.TUMOR.2 > 5) %>% # filter out variants with a tumor alternate allele read depth less than 5
+    dplyr::filter(!grepl("rs", snp_id)) %>% # filter out known snps
+    dplyr::ungroup() %>% 
+    dplyr::mutate(SYMBOL = as.character(SYMBOL)) %>% 
+    dplyr::group_by(snp_id) %>% 
+    dplyr::mutate(recurrence = paste(as.character(sample), collapse = ";")) %>% 
+    dplyr::mutate(counts = dplyr::n()) %>% 
+    identity()
+  
+  return(my_variants)
+}
+
+filter_variant_set  <- function (my_variants, datatype) {
+    if (datatype %in% c("tn")) {
+      # browser()
+      my_variants <- filter_calls(my_variants) %>% 
+        dplyr::filter((AD.NORMAL.1 != 0 | AD.NORMAL.2 != 0)) %>% # filter out variants with zero normal reads (ref or alt)
+        dplyr::filter(gnomad.AF.value < 0.01 | is.na(gnomad.AF.value)) %>%  # filter out variants with a gnomad frequency greater than .05 percent
+        identity()
+      
+      return(my_variants)
+
+    } else if (datatype == "pon") {
+      # browser()
+      my_variants <- filter_calls(my_variants) %>% 
+        dplyr::filter(gnomad.AF < 0.01 | is.na(gnomad.AF)) %>%  # filter out variants with a gnomad frequency greater than .05 percent
+        identity()
+      
+      return(my_variants)
+
+    } else if (datatype == "cl") {
+      # browser()
+      my_variants <- filter_calls(my_variants) %>% 
+        dplyr::filter(gnomad.AF < 0.01 | is.na(gnomad.AF)) %>%  # filter out variants with a gnomad frequency greater than .05 percent
+        identity()
+      
+      return(my_variants)
+
+    }
+    else {
+        stop("'datatype' describes the method of variant calling, either tumor/normal paired (tn) or panel of normals (pon)")
+    }
+}
+
+divide_t_cl <- function(mydf) {
+    mydf <- dplyr::mutate(mydf, sample.Cell.Line = ifelse(grepl("C", sample), as.character(sample),"")) %>%
+      dplyr::mutate(sample.Tumor = ifelse(grepl("T", sample), as.character(sample), "")) %>%
+      dplyr::mutate(AF.CELL_LINE = ifelse(grepl("C", sample), as.character(AF.TUMOR), "")) %>%
+      dplyr::mutate(AF.TUMOR = ifelse(grepl("T", sample), as.character(AF.TUMOR), "")) %>%
+      dplyr::mutate(AD.TUMOR.1 = as.character(AD.TUMOR.1), AD.TUMOR.2 = as.character(AD.TUMOR.2)) %>% 
+      dplyr::mutate(AD.CELL_LINE.1 = ifelse(grepl("CL", sample), AD.TUMOR.1, "")) %>% 
+      dplyr::mutate(AD.CELL_LINE.2 = ifelse(grepl("CL", sample), AD.TUMOR.2, "")) %>% 
+      dplyr::mutate(AD.TUMOR.1 = ifelse(grepl("T", sample), AD.TUMOR.1, "")) %>% 
+      dplyr::mutate(AD.TUMOR.2 = ifelse(grepl("T", sample), AD.TUMOR.2, "")) %>% 
+      identity()
+    
+    return(mydf)
+}
+
+three_author_intersect <- function(cobrinik_vars, caller){
+  
+      # find intersection between zhang and stachelek recurrent variants -----------  
+    zhang_vars <- read.csv("~/rb_pipeline/doc/zhang_supp_info/tidy_format/variant_summary.csv", stringsAsFactors = F)
+    
+    # find intersection between zhang and stachelek recurrent genes -----------
+  zhang_genes <- read.csv("~/rb_pipeline/doc/zhang_supp_info/tidy_format/variants_summary_pdf.csv", stringsAsFactors = FALSE) %>% 
+    dplyr::rename(SYMBOL = Gene) %>%
+    group_by(SYMBOL) %>%
+    dplyr::mutate(zhang_incidence = dplyr::n()) %>%
+    dplyr::filter(row_number() == 1)
+  
+  # find intersection between zhang and stachelek recurrent variants ---------
+  stchlk_zhang_gene_intxn <-  inner_join(zhang_genes, cobrinik_vars, by = c("SYMBOL" = "SYMBOL")) %>%
+    arrange(SYMBOL, sample) %>%
+    divide_t_cl() %>% 
+    dplyr::select(seqnames , start , end , SYMBOL, sample.Tumor,
+                  AF.TUMOR, AD.TUMOR.1, AD.TUMOR.2, sample.Cell.Line, AF.CELL_LINE,
+                  AD.CELL_LINE.1, AD.CELL_LINE.2, Consequence , HGVSc, zhang_incidence) %>%
+    dplyr::filter(SYMBOL != "RB1") %>%
+    dplyr::distinct() %>% 
+    identity()
+  
+  write.table(stchlk_zhang_gene_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_stchlk_zhang_gene_intxn.csv"), sep =",", row.names = FALSE)
+  # only BCOR!
+  
+  # find intersection between kooi and stachelek recurrent variants ---------
+  
+  kooi_vars <-  read.table("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/variant_summary_kooi.csv")
+  kooi_vars <- dplyr::rename(kooi_vars, seqnames = Chr, start = Start, end = End, REF = Ref, ALT = Obs) %>%
+    group_by(Gene) %>%
+    dplyr::mutate(kooi_incidence = dplyr::n()) %>%
+    dplyr::filter(row_number() == 1)
+  stchlk_kooi_var_intxn <- semi_join(cobrinik_vars, kooi_vars, by = c("seqnames", "start", "end", "REF", "ALT"))
+  write.table(stchlk_kooi_var_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_stchlk_kooi_var_intxn.csv"), sep =",", row.names = FALSE)
+  
+  # find intersection between mcevoy and stachelek recurrent genes ------------
+  stchlk_kooi_gene_intxn <-  inner_join(cobrinik_vars, kooi_vars, by = c("SYMBOL" = "Gene")) %>%
+    arrange(SYMBOL, sample) %>%
+    divide_t_cl() %>% 
+    dplyr::select(seqnames = seqnames.x, start = start.x, end = end.x, SYMBOL, sample.Tumor,
+                  AF.TUMOR, AD.TUMOR.1, AD.TUMOR.2, sample.Cell.Line, AF.CELL_LINE,
+                  AD.CELL_LINE.1, AD.CELL_LINE.2, Consequence , HGVSc, kooi_incidence) %>%
+
+    dplyr::filter(SYMBOL != "RB1") %>%
+    dplyr::distinct() %>% 
+    identity()
+  
+  write.table(stchlk_kooi_gene_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_stchlk_kooi_gene_intxn.csv"), sep =",", row.names = FALSE)
+  # only BCOR!
+  
+  # find intersection between mcevoy and stachelek recurrent variants ------------
+  mcevoy_vars <-  read.csv("~/rb_pipeline/doc/mcevoy_supp_info/tidy_format/validated_tier-1_mutations_for_all_ten_retinoblastomas_snvs.csv")
+  
+  mcevoy_vars <- dplyr::rename(mcevoy_vars, seqnames = chromosome, start = pos, Gene = gene) %>%
+    dplyr::mutate(end = start) %>% 
+    tidyr::separate(genotype..Ref.Non.ref., into = c("REF", "ALT"), sep = "/") %>% 
+    group_by(Gene) %>%
+    mutate(mcevoy_incidence = dplyr::n()) %>%
+    dplyr::filter(row_number() == 1) %>% 
+    dplyr::select(-sample)
+  
+  stchlk_mcevoy_var_intxn <- semi_join(cobrinik_vars, mcevoy_vars, by = c("seqnames", "start", "end", "REF", "ALT"))
+  write.table(stchlk_mcevoy_var_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_mcevoy_var_intxn.csv"), sep =",", row.names = FALSE)
+  
+  # find intersection between mcevoy and stachelek recurrent genes ------------
+  if(any(mcevoy_vars$Gene %in% cobrinik_vars)){
+    stchlk_mcevoy_gene_intxn <-  inner_join(cobrinik_vars, mcevoy_vars, by = c("SYMBOL" = "Gene")) %>% 
+      arrange(SYMBOL, sample) %>% 
+      divide_t_cl() %>% 
+      dplyr::select(seqnames, start, SYMBOL, sample.Tumor, AF.TUMOR, AD.TUMOR.1, AD.TUMOR.2, sample.Cell.Line, AF.CELL_LINE,
+                  Consequence = Consequence.x, HGVSc = HGVSc.x, mcevoy_incidence) %>%
+      dplyr::filter(SYMBOL != "RB1") %>%
+      mutate(AF.TUMOR = as.numeric(AF.TUMOR), AF.CELL_LINE = as.numeric(AF.CELL_LINE)) %>% 
+      dplyr::distinct() %>% 
+        identity()
+  
+    write.table(stchlk_mcevoy_gene_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_stchlk_mcevoy_gene_intxn.csv"), sep =",", row.names = FALSE)  
+  }
+  
+  
+  
+  
+  # stchlk_three_author_var_intxn <-  inner_join(cobrinik_vars, three_author_variants, by = c("SYMBOL" = "gene"))
+  
+  three_author_genes <- list(stchlk_kooi_gene_intxn, stchlk_zhang_gene_intxn)
+
+  mincol <- Reduce(intersect, lapply(three_author_genes, colnames))
+                                             
+  stchlk_three_author_gene_intxn <- Reduce(function(...) full_join(..., by=mincol), three_author_genes) %>% 
+    dplyr::distinct()
+  
+  write.csv(stchlk_three_author_gene_intxn, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_three_author_gene_intxn.csv"))
+
+  return(stchlk_three_author_gene_intxn)
+
+}
+
+compare_t_cl <- function(cobrinik_vars, caller){
+  # find intersection between tumor and cell line variants ------------------
+  t_vars <- dplyr::filter(cobrinik_vars, grepl("T", sample)) %>%
+    mutate(prefix = substr(sample, 1,2)) %>%
+    identity()
+  
+  cl_vars <- dplyr::filter(cobrinik_vars, grepl("CL", sample)) %>%
+    mutate(prefix = substr(sample, 1,2)) %>%
+    dplyr::rename(AF.CELL_LINE = AF.TUMOR) %>% 
+    identity()
+  
+  t_cl_vars <- dplyr::inner_join(t_vars, cl_vars, by = c("seqnames", "start", "end", "REF", "ALT", "prefix", "SYMBOL")) %>% 
+    # dplyr::filter(AF.TUMOR.x > 0.279 | AF.TUMOR.y > 0.279) %>%
+    arrange(SYMBOL, prefix) %>%
+    ungroup() %>%
+    dplyr::rename(AD.CELL_LINE.1 = AD.TUMOR.1.y, AD.CELL_LINE.2 = AD.TUMOR.2.y) %>% 
+    dplyr::select(seqnames, start, end, SYMBOL, sample.Tumor = sample.x,
+                  AF.TUMOR, AD.TUMOR.1 = AD.TUMOR.1.x, AD.TUMOR.2 = AD.TUMOR.2.x, sample.Cell.Line = sample.y, AF.CELL_LINE,
+                  AD.CELL_LINE.1, AD.CELL_LINE.2, Consequence = Consequence.x, HGVSc = HGVSc.x) %>%
+    mutate(AF.TUMOR = as.numeric(AF.TUMOR), AF.CELL_LINE = as.numeric(AF.CELL_LINE)) %>%
+    dplyr::distinct() %>% 
+    dplyr::filter(!is.na(SYMBOL)) %>% 
+    identity()
+  
+  t_cl_vars_besides_RB1 <- dplyr::filter(t_cl_vars, SYMBOL != "RB1")
+  
+  write.table(t_cl_vars, paste0("~/rb_pipeline/doc/RB_exome_manuscript/SNV/", caller, "_t_cl_vars.csv"), sep =",", row.names = FALSE)
+  write.table(t_cl_vars_besides_RB1, paste0("~/rb_pipeline/doc/RB_exome_manuscript/", caller, "_t_cl_vars_besides_RB1.csv"), sep =",", row.names = FALSE)
+  
+  theme_set(theme_bw())
+  
+  cons_plot <- ggplot(t_cl_vars, aes(factor(Consequence))) + geom_bar(stat="count") +
+     theme(axis.text.x = element_text(angle = 90,  hjust = 1),
+          axis.ticks = element_blank(),
+          axis.text.y = element_blank())
+  print(cons_plot)
+  
+  return(t_cl_vars)
+  
+}
+
+load_vcfs <- function(vcf_file_paths, sample_type){
+
+  vcf_sample_names <- gsub("_.*$", "", basename(vcf_file_paths))
+  vcf_sample_list <- lapply(vcf_file_paths, function(x)VariantAnnotation::readVcf(x, "hg19"))
+  names(vcf_sample_list) <- vcf_sample_names
+  vcf_sample_list_path  <- paste0("~/rb_pipeline/results/SNV/", sample_type, "_list.rds")
+  saveRDS(vcf_sample_list, file = vcf_sample_list_path)
+  return(vcf_sample_list)  
+}
+
+
+```
+
+
+
+# load mutect2 vcf files
+
+```{r load_mutect2_datasets, echo = F, eval=F}
+
+#clinvar <-  read.table('../Homo_sapiens/ClinVar/clinvar_alleles.single.b37.tsv',sep='\t',header=T,quote='',comment.char='')
+
+# load input --------------------------------------------------------------
+
+m2_tumor_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-T_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_cell_line_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-CL_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_pon_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-N_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_reynolds_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{3}-CL_1_mutect2_vep.vcf$", full.names = TRUE)
+
+# load and save tumor list
+m2_tumor_list <- load_vcfs(m2_tumor_filenames, "m2_tumor")
+
+# load and save cell line list
+m2_cell_line_list <- load_vcfs(m2_cell_line_filenames, "m2_cell_line")
+
+# load and save normal list
+m2_pon_list <- load_vcfs(m2_pon_filenames, "m2_normal")
+
+# load and save reynolds list
+m2_reynolds_list <- load_vcfs(m2_reynolds_filenames, "m2_reynolds")
+
+
+```
+
+# generate lists of vcfs for each type of data: cobrinik cell line, cobrinik tumor, cobrinik normal, and reynolds cell line
+
+```{r generate lists of vcfs for each data type, echo=FALSE, warning=FALSE, eval=F}
+
+m2_cell_line_list <- "~/rb_pipeline/results/SNV/m2_cell_line_list.rds"
+m2_cell_line_list <- readRDS(m2_cell_line_list)
+
+m2_tumor_list <- "~/rb_pipeline/results/SNV/m2_tumor_list.rds"
+m2_tumor_list <- readRDS(m2_tumor_list)
+
+m2_pon_list <- "~/rb_pipeline/results/SNV/m2_normal_list.rds"
+m2_pon_list <- readRDS(m2_pon_list)
+
+m2_reynolds_list <- "~/rb_pipeline/results/SNV/m2_reynolds_list.rds"
+m2_reynolds_list <- readRDS(m2_reynolds_list)
+```
+
+
+## load strelka snv vcf files 
+
+```{r , echo=FALSE, eval=F}
+
+strelka_snv_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_snv_vep.vcf.gz$",  full.names = TRUE, recursive = TRUE)
+
+strelka_snv_list <- load_vcfs(strelka_snv_filenames, "strelka_snv")
+
+```
+
+## load strelka indel vcf files 
+
+```{r , echo=FALSE, eval=F}
+
+strelka_indel_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_indel_vep.vcf.gz$",  full.names = TRUE, recursive = TRUE)
+
+strelka_indel_list <- load_vcfs(strelka_indel_filenames, "strelka_indel")
+
+
+```
+
+
+# collate mutect2 vcfs
+
+```{r, echo=FALSE, eval=F}
+
+tidy_m2_tumors0 <- collate_vcfs(m2_tumor_list, mutect2_tidy, "tn")
+saveRDS(tidy_m2_tumors0, "~/rb_pipeline/results/SNV/tidy_m2_tumors.rds")
+
+tidy_m2_cell_lines0 <- collate_vcfs(m2_cell_line_list, mutect2_tidy, "tn")
+saveRDS(tidy_m2_cell_lines0, "~/rb_pipeline/results/SNV/tidy_m2_cell_lines.rds")
+
+tidy_m2_normals0 <- collate_vcfs(m2_pon_list, mutect2_tidy, "pon")
+saveRDS(tidy_m2_normals0, "~/rb_pipeline/results/SNV/tidy_m2_normals.rds")
+
+tidy_m2_reynolds0 <- collate_vcfs(m2_reynolds_list, mutect2_tidy, "pon")
+saveRDS(tidy_m2_reynolds0, "~/rb_pipeline/results/SNV/tidy_m2_reynolds.rds")
+
+
+```
+
+# collate strelka snvs
+
+```{r , echo=FALSE, eval=F}
+
+
+tidy_strelka_snvs0 <- stchlk.exome::collate_vcfs(strelka_snv_list, strelka_tidy_snvs, "tn")
+
+strelka_snv_path <- "~/rb_pipeline/results/SNV/strelka_snvs.rds"
+saveRDS(tidy_strelka_snvs0, strelka_snv_path)
+
+```
+
+# collate strelka indels
+
+```{r , echo=FALSE, eval=F}
+
+tidy_strelka_indels0 <- stchlk.exome::collate_vcfs(strelka_indel_list, strelka_tidy_indels, "tn")
+
+strelka_indel_path <- "~/rb_pipeline/results/SNV/strelka_indels.rds"
+saveRDS(tidy_strelka_indels0, strelka_indel_path)
+
+```
+
+# read in raw strelka snvs 
+
+```{r, eval=T}
+
+strelka_snv_path <- "~/rb_pipeline/results/SNV/strelka_snvs.rds"
+tidy_strelka_snvs0 <- readRDS(strelka_snv_path)
+
+```
+
+# read in raw strelka indels 
+
+```{r, eval=T}
+
+
+strelka_indel_path <- "~/rb_pipeline/results/SNV/strelka_indels.rds"
+tidy_strelka_indels0 <- readRDS(strelka_indel_path)
+
+```
+
+# retidy strelka snvs
+
+```{r, eval=T}
+
+tidy_strelka_snvs <- retidy_strelka_snvs(tidy_strelka_snvs0)
+
+filt_strelka_snvs <- filter_variant_set(tidy_strelka_snvs, "tn")
+
+strelka_snv_path <- "~/rb_pipeline/results/SNV/tidy_strelka_snvs.rds"
+saveRDS(tidy_strelka_snvs, strelka_snv_path)
+
+strelka_snv_filt_path <- "~/rb_pipeline/results/SNV/tidy_strelka_snvs_filt.rds"
+saveRDS(filt_strelka_snvs, strelka_snv_filt_path)
+
+```
+
+# retidy strelka indels
+
+```{r, eval=T}
+# ref_counts = value of FORMAT column value “TAR”
+# alt_counts = value of FORMAT column value “TIR”
+# ref_t1count = $ref_counts[0] (use the tier1 counts -- the first value in the comma-delimited list)
+# alt_t1count = $alt_counts[0] (...likewise..)
+
+tidy_strelka_indels <- retidy_strelka_indels(tidy_strelka_indels0)
+
+filt_strelka_indels <- filter_variant_set(tidy_strelka_indels, "tn")
+
+strelka_indel_path <- "~/rb_pipeline/results/SNV/tidy_strelka_indels.rds"
+saveRDS(tidy_strelka_indels, strelka_indel_path)
+
+strelka_indel_filt_path <- "~/rb_pipeline/results/SNV/tidy_strelka_indels_filt.rds"
+saveRDS(filt_strelka_indels, strelka_indel_filt_path)
+
+```
+
+# read in clean strelka variants and combine
+
+```{r, eval=T}
+# read in clean strelka snvs 
+strelka_snv_filt_path <- "~/rb_pipeline/results/SNV/tidy_strelka_snvs_filt.rds"
+filt_strelka_snvs <- readRDS(strelka_snv_filt_path)
+
+# read in clean strelka indels 
+strelka_indel_filt_path <- "~/rb_pipeline/results/SNV/tidy_strelka_indels_filt.rds"
+filt_strelka_indels <- readRDS(strelka_indel_filt_path)
+
+match_cols <- intersect(colnames(filt_strelka_indels), colnames(filt_strelka_snvs))
+
+strelka_variants <- rbind(filt_strelka_snvs[match_cols], filt_strelka_indels[match_cols])
+
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants_filt.rds"
+saveRDS(strelka_variants, strelka_variants_path)
+
+```
+
+# read in combined strelka variants
+
+```{r}
+
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants_filt.rds"
+
+strelka_variants <- readRDS(strelka_variants_path)
+
+```
+
+
+# load unfiltered mutect2 variants
+
+```{r, eval=T}
+# read in raw mutect2 variants
+
+m2_raw_tumors_path <- "~/rb_pipeline/results/SNV/tidy_m2_tumors.rds"
+tidy_m2_tumors0 <- readRDS(m2_raw_tumors_path)
+
+m2_raw_cell_lines_path <- "~/rb_pipeline/results/SNV/tidy_m2_cell_lines.rds"
+tidy_m2_cell_lines0 <- readRDS(m2_raw_cell_lines_path)
+
+m2_raw_normals_path <- "~/rb_pipeline/results/SNV/tidy_m2_normals.rds"
+tidy_m2_normals0 <- readRDS(m2_raw_normals_path)
+
+m2_raw_reynolds_path <- "~/rb_pipeline/results/SNV/tidy_m2_reynolds.rds"
+tidy_m2_reynolds0 <- readRDS(m2_raw_reynolds_path)
+
+
+```
+
+
+# pon subtract mutect2 variants
+
+```{r retidy vcfs, eval=T}
+
+# trace("retidy_vcfs", quote(browser(skipCalls = 4)),
+#       exit = quote(browser(skipCalls = 4)))
+
+# anti join panel of normals variants
+m2_tidy_tumors <- pon_subtract_m2_vars(tidy_m2_tumors0, tidy_m2_normals0)
+m2_tidy_cell_lines <- pon_subtract_m2_vars(tidy_m2_cell_lines0, tidy_m2_normals0)
+m2_tidy_reynolds <- pon_subtract_m2_vars(tidy_m2_reynolds0, tidy_m2_normals0)
+
+m2_vars_path <- paste0("~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_")
+
+m2_reynolds_path <- paste0(m2_vars_path, "reynolds.rds")
+m2_cell_lines_path <- paste0(m2_vars_path, "cell_lines.rds")
+m2_tumors_path <- paste0(m2_vars_path, "tumors.rds")
+
+saveRDS(m2_tidy_tumors, m2_tumors_path)
+saveRDS(m2_tidy_cell_lines, m2_cell_lines_path)
+saveRDS(m2_tidy_reynolds, m2_reynolds_path)
+
+```
+
+# load pon subtracted mutect2 variants
+
+```{r}
+
+m2_vars_path <- "~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_"
+
+m2_reynolds_path <- paste0(m2_vars_path, "reynolds.rds")
+m2_cell_lines_path <- paste0(m2_vars_path, "cell_lines.rds")
+m2_tumors_path <- paste0(m2_vars_path, "tumors.rds")
+
+m2_tidy_reynolds <- readRDS(m2_reynolds_path)
+m2_tidy_cell_lines <- readRDS(m2_cell_lines_path)
+m2_tidy_tumors<- readRDS(m2_tumors_path)
+
+```
+
+
+# filter and create table of all mutect2 somatic variants
+
+```{r 5, echo = F, eval=T}
+
+# select columns to enable clean rbinding of mutect2 variants
+
+m2_tidy_tumors <- identity(m2_tidy_tumors)
+
+m2_tidy_cell_lines <- dplyr::select(m2_tidy_cell_lines, colnames(m2_tidy_tumors)) %>% 
+  identity()
+
+min_colnames <- colnames(m2_tidy_tumors)[!(grepl("NORMAL", colnames(m2_tidy_tumors)))]
+
+m2_tidy_reynolds <- dplyr::select(m2_tidy_reynolds, min_colnames) %>% 
+  identity()
+
+# filter mutect2 variants
+m2_var_list <- purrr::map2(list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds), c("tn", "tn", "pon"), filter_variant_set)
+
+m2_filt_variant_paths <- paste0("~/rb_pipeline/results/SNV/", c("clean_vc_tumor_variants.txt", "clean_vc_cell_line_variants.txt", "clean_reynolds_cell_line_variants.txt"))
+
+purrr::map2(m2_var_list, m2_filt_variant_paths, write.table, sep = "\t")
+
+m2_germline <- filter_variant_set(tidy_m2_normals0, "pon")
+m2_germline_path <- "~/rb_pipeline/doc/RB_exome_manuscript/SNV/m2_germline_variants.csv"
+write.table(m2_germline, m2_germline_path)
+
+m2_germline <- read.table(m2_germline_path)
+
+# combine all mutect2 variants into a single list 
+m2_vars <- dplyr::bind_rows(m2_var_list) %>%
+  identity()
+
+# save mutect2 variant df
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants.rds"
+saveRDS(m2_vars, m2_var_path)
+
+# retrieve split list of m2 variants
+m2_vars_list <- split_m2_vars(m2_vars)
+
+
+```
+
+
+# read in mutect2 variants
+
+```{r}
+
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants.rds"
+m2_vars <- readRDS(m2_var_path)
+
+```
+
+
+# collate RB1 mutect2 snvs for all samples
+
+```{r 4, echo=FALSE}
+
+tidy_and_select_rb <- function(variants){
+  # browser()
+  variants <- variants[variants$SYMBOL == "RB1" & !is.na(variants$genename),]
+  variants <- variants[,c("sample", "seqnames", "start", "end", "AF.TUMOR")]
+}
+
+m2_vars_rb <- tidy_and_select_rb(m2_vars)
+
+rb1_var_from_bam_igv <- read.csv("~/rb_pipeline/results/rb1_var_not_mutect2.csv")
+# tidy_rb_variants <- rbindlist(list(m2_tidy_tumors_rb, m2_tidy_cell_lines_rb, m2_tidy_reynolds_rb, rb1_var_from_bam_igv)) %>% 
+#   arrange(sample)
+
+tidy_rb_variants <- rbindlist(list(m2_vars_rb, rb1_var_from_bam_igv), fill = T) %>% 
+  arrange(sample)
+
+rb1_status_old <- read.csv("~/rb_pipeline/doc/rb1_status_old.csv") %>% 
+  dplyr::select(-c(somatic.snv.VAF, somatic.snv.AAchange, germline.snv.VAF, germline.snv.AAchange))
+
+rb1_status <- full_join(tidy_rb_variants, rb1_status_old, by = c("sample" = "Sample.ID")) %>% 
+  dplyr::rename(chrom = seqnames)
+
+rb1_status <- rb1_status[gtools::mixedorder(rb1_status$sample),]
+
+write.table(rb1_status, "~/rb_pipeline/doc/RB_exome_manuscript/rb1_status2.csv", sep = "\t", row.names = F)
+
+
+```
+
+# find variants that are shared between mutect2 tumor and matched cell line
+
+```{r , warning=FALSE}
+
+m2_t_cl_vars <- compare_t_cl(m2_vars, "mutect2")
+
+write.table(m2_t_cl_vars, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/m2_t_cl_vars.csv", sep = "\t", row.names = F)
+
+```
+
+# find variants that are shared between strelka tumor and matched cell line
+
+```{r , warning=FALSE}
+
+strelka_t_cl_vars <- compare_t_cl(strelka_variants, "strelka")
+
+write.table(strelka_t_cl_vars, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/strelka_t_cl_vars.csv", sep = "\t", row.names = F)
+
+```
+
+# compile list of nonrecurrent variants from all three prior studies (Kooi, Zhang, McEvoy)
+
+```{r , }
+zhang_vars <- read.csv("~/rb_pipeline/doc/zhang_supp_info/tidy_format/variant_summary.csv", stringsAsFactors = F) %>% 
+  dplyr::select(Class, X1CON.REF.MUT, gene = Nearest.Gene) %>% 
+  tidyr::separate(Class, c("seqnames", "start", "end"), sep = "_") %>% 
+  tidyr::separate(X1CON.REF.MUT, c("con", "REF", "ALT")) %>% 
+  dplyr::select(-con) %>% 
+  dplyr::mutate(VAF = NA, author = "zhang et. al")
+
+kooi_vars <-  read.table("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/variant_summary_kooi.csv") %>% 
+  dplyr::select(seqnames = Chr, start = Start, end = End, REF = Ref, ALT = Obs, gene = Gene, VAF) %>% 
+  dplyr::mutate(author = "kooi et. al")
+
+mcevoy_vars <-  read.csv("~/rb_pipeline/doc/mcevoy_supp_info/tidy_format/validated_tier-1_mutations_for_all_ten_retinoblastomas_snvs.csv", stringsAsFactors = F) %>% 
+  dplyr::select(seqnames = chromosome, start = pos, genotype..Ref.Non.ref., gene, Non.ref.Allele.Counts, Ref.Allele.Counts) %>% 
+  dplyr::mutate(end = NA, VAF = Non.ref.Allele.Counts/sum(Non.ref.Allele.Counts, Ref.Allele.Counts)) %>% 
+  dplyr::select(-c(Non.ref.Allele.Counts, Ref.Allele.Counts)) %>% 
+  tidyr::separate(genotype..Ref.Non.ref., c("REF", "ALT"), sep = "/") %>%
+  dplyr::mutate(author = "mcevoy et. al")
+
+three_author_variants <- rbindlist(list(zhang_vars, kooi_vars, mcevoy_vars))
+
+```
+
+# find three author gene intersection with strelka variants
+
+```{r}
+
+strelka_3a_genes <- three_author_intersect(strelka_variants, "strelka")
+
+write.table(strelka_3a_genes, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/strelka_3a_genes.csv")
+
+```
+
+# find three author gene intersection with mutect2 variants
+
+```{r}
+
+m2_3a_genes <- three_author_intersect(m2_vars, "mutect2")
+m2_3a_genes_vc <- dplyr::filter(m2_3a_genes, !grepl("[0-9]{3}-CL", sample.Cell.Line))
+m2_3a_genes_reynolds <- dplyr::filter(m2_3a_genes, grepl("[0-9]{3}-CL", sample.Cell.Line))
+
+write.table(m2_3a_genes_vc, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/m2_vc_3a_genes.csv")
+write.table(m2_3a_genes_reynolds, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/m2_reynolds_3a_genes.csv")
+
+```
+
+# compare mutect2 with strelka calls --------------------------------------
+
+```{r compare_strelka_mutect2, echo=FALSE}
+
+ensemble_variants <- inner_join(m2_vars, strelka_variants, by = c("sample", "start", "end", "REF", "ALT", "SYMBOL")) %>%
+  arrange(SYMBOL) %>% 
+  identity()
+
+write.table(ensemble_variants, "~/rb_pipeline/results/SNV/ensemble_mutect2_strelka_vars.csv", sep =",", row.names = FALSE)
+
+```
+
+#check for overlap between stchlk SCNAs and Kooi SCNA peak regions
+
+```{r 2, eval=F}
+kooi_per_gene_SCNA_path <- "~/rb_pipeline/doc/SCNA_meta_analysis_kooi_supporting_information/tidy_format/per_gene_SCNA_gain_loss_val_kooi.csv"
+per_gene_SCNA <- read.csv(kooi_per_gene_SCNA_path)
+
+peak_coords <- per_gene_SCNA[!is.na(per_gene_SCNA$peak),]
+
+peak_coords <- split(peak_coords, peak_coords$peak)
+
+get_peak_coords <- function(peak_dat){
+  # browser()
+  peak_start <- min(peak_dat$start)
+  peak_end <- max(peak_dat$end)
+  chrom <- peak_dat$seqnames[[1]]
+  cn_change <- ifelse(sum(peak_dat$gain.loss.difference) > 0, "gain", "loss")
+  
+  return(list( "chr" = chrom, "feature_start" = peak_start, "feature_end" = peak_end, "cn_change" = cn_change))
+}
+
+kooi_peak_regions <- purrr::map_df(peak_coords, get_peak_coords)
+
+write.table(kooi_peak_regions, "~/rb_pipeline/doc/SCNA/kooi_SCNA_peak_regions.csv")
+
+```
+
+# find overlapping segments in SCNA
+
+```{r, eval=F}
+
+seg_span_gene <- function(baf_seg, chr, feature_start, feature_end, cn_change, ...){
+  
+  baf_segment <- dplyr::filter(baf_seg, chrom == chr & (!(start < feature_start & end < feature_end) & !(start > feature_end & end > feature_end))) %>% 
+    dplyr::select(-ID)
+  
+  if (cn_change == "gain"){
+    baf_segment <- dplyr::filter(baf_segment, seg.mean > 0) 
+  } else if (cn_change == "loss"){
+    baf_segment <- dplyr::filter(baf_segment, seg.mean < 0)
+  }
+  
+  return(baf_segment)
+}
+
+kooi_peak_regions <- read.table("~/rb_pipeline/doc/SCNA/kooi_SCNA_peak_regions.csv", stringsAsFactors = F)
+
+kooi_peak_list <- lapply(kooi_peak_regions, "[")
+kooi_peak_list <- unname(lapply(kooi_peak_list, function(x) unname(as.list(x))))
+
+# output vc seg
+vc_seg_path <- "~/rb_pipeline/results/SCNA/vc_SCNA_segments.txt"
+vc_seg <- read.table(vc_seg_path, sep = "\t")
+
+# output reynolds seg
+reynolds_seg_path <- "~/rb_pipeline/results/SCNA/reynolds_SCNA_segments.txt"
+reynolds_seg <- read.table(reynolds_seg_path, sep = "\t")
+
+vc_seg_overlap_path <- "~/rb_pipeline/results/SCNA/vc_seg_overlap_kooi_peaks.csv"  
+vc_seg_in_kooi_peaks <- purrr::pmap(kooi_peak_list, function(a,b,c,d) seg_span_gene(vc_seg, a, b, c, d))
+vc_seg_in_kooi_peaks <- rbindlist(vc_seg_in_kooi_peaks)
+write.csv(vc_seg_in_kooi_peaks, vc_seg_overlap_path)
+
+reynolds_seg_overlap_path <- "~/rb_pipeline/results/SCNA/reynolds_seg_overlap_kooi_peaks.csv"
+reynolds_seg_in_kooi_peaks <- purrr::pmap(kooi_peak_list, function(a,b,c, d) seg_span_gene(reynolds_seg, a, b, c, d))
+reynolds_seg_in_kooi_peaks <- rbindlist(reynolds_seg_in_kooi_peaks)
+write.csv(reynolds_seg_in_kooi_peaks, reynolds_seg_overlap_path)  
+```
+
+
+# play with somatic signatures 
+
+```{r somatic_sigs, echo=FALSE,eval=F}
+
+
+read_vr <- function(vr0, sample_name){
+  vr <- as(vr0, "VRanges")
+
+  #Only SNV substitutions are currently supported; need to remove indels
+  idx_snv = ref(vr) %in% DNA_BASES & alt(vr) %in% DNA_BASES
+  vr = vr[idx_snv]
+  vr$sample_name <- sample_name
+
+  #drop softFilterMatrix, which would otherwise summarize GATK filter field, disallow concat of mult. vranges
+  resetFilter(vr)
+  return(vr)
+}
+
+vr_list <- map2(mutect2_tumor_list, names(mutect2_tumor_list), read_vr)
+
+vr0 <- Reduce(c, vr_list)
+
+sca_motifs = mutationContext(vr0, BSgenome.Hsapiens.UCSC.hg19)
+
+sca_mm = motifMatrix(sca_motifs, group = "sample_name", normalize = TRUE)
+
+head(round(sca_mm, 4))
+
+pdf("./results/SNV/somatic_signatures_stachelek.pdf")
+plotMutationSpectrum(sca_motifs, "sample_name")
+dev.off()
+
+n_sigs = 2:8
+
+gof_nmf = assessNumberSignatures(sca_mm, n_sigs, nReplicates = 5)
+
+gof_pca = assessNumberSignatures(sca_mm, n_sigs, pcaDecomposition)
+
+plotNumberSignatures(gof_nmf)
+
+plotNumberSignatures(gof_pca)
+
+head(sca_motifs)
+```
+
+
+# plot VAF distribution 
+
+```{r vaf_diff, echo=FALSE, eval=F}
+
+ggplot(strelka_variants, aes(AF.TUMOR)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+
+ggplot(m2_vars, aes(AF.TUMOR)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+
+
+ggplot(kooi_vars, aes(VAF)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+```

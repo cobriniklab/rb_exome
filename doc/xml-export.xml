@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" xmlns="http://schemas.openxmlformats.org/officeDocument/2006/bibliography">
+  <b:Source>
+    <b:Tag>manning-dyson-2012-rb:-mitotic-implications-of-a-tumour-suppressor</b:Tag>
+    <b:SourceType>Misc</b:SourceType>
+    <b:Title>RB: mitotic implications of a tumour suppressor</b:Title>
+    <b:Year>2012</b:Year>
+    <b:RefOrder>1</b:RefOrder>
+    <b:Author>
+      <b:Author>
+        <b:NameList>
+          <b:Person>
+            <b:First>Amity L.</b:First>
+            <b:Last>Manning</b:Last>
+          </b:Person>
+          <b:Person>
+            <b:First>Nicholas J.</b:First>
+            <b:Last>Dyson</b:Last>
+          </b:Person>
+        </b:NameList>
+      </b:Author>
+    </b:Author>
+    <b:PublicationTitle>Nature Reviews Cancer</b:PublicationTitle>
+    <b:StandardNumber>1474-175X</b:StandardNumber>
+  </b:Source>
+  <b:Source>
+    <b:Tag>cobrinik-2005-pocket-proteins-and-cell-cycle-control.</b:Tag>
+    <b:SourceType>JournalArticle</b:SourceType>
+    <b:Title>Pocket proteins and cell cycle control.</b:Title>
+    <b:Year>2005</b:Year>
+    <b:RefOrder>1</b:RefOrder>
+    <b:Author>
+      <b:Author>
+        <b:NameList>
+          <b:Person>
+            <b:First>David</b:First>
+            <b:Last>Cobrinik</b:Last>
+          </b:Person>
+        </b:NameList>
+      </b:Author>
+    </b:Author>
+    <b:JournalName>Oncogene</b:JournalName>
+    <b:Pages>2796-2809</b:Pages>
+    <b:Volume>24</b:Volume>
+    <b:Issue>17</b:Issue>
+    <b:StandardNumber>0950-9232</b:StandardNumber>
+  </b:Source>
+</b:Sources>

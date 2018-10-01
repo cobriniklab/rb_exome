@@ -1,0 +1,307 @@
+---
+title: "RB Exome Manuscript"
+author: "Kevin Stachelek"
+date: "`r format(Sys.time(), '%d. %B %Y')`"
+output:
+  html_document: default
+  word_document: 
+      reference_docx: RB_exome_manuscript_template.docx
+  pdf_document: default
+bibliography: rb_exome_manuscript.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+
+embed_data= function(x= mtcars, filename= "file.csv", label= "Get data"){
+
+  # Create encoded Base64 datastream 
+  encode_data= function(x){
+    write.table(x, "./file.csv", sep = ",", row.names = FALSE)
+    enc= sprintf('data:text/csv;base64,%s', openssl::base64_encode(paste0(readLines("./file.csv"), collapse="\n")) )
+    unlink("./file.csv")
+    return(enc)
+  }
+
+  # String result ready to be placed in rmarkdown
+  paste0("<a download='", filename, "' href=", encode_data(x), ">", label, "</a>")
+
+}
+```
+
+## Intro
+1. General and brief background of retinoblastoma
+Retinoblastoma is a disease of the developing retina. Retinoblastoma is initiated, in most cases, by inactivation of two copies of the *RB* gene and subsequent loss of RB protein. The unique sensitivity of the developing retina to loss of RB results in tumor formation. Retinoblastoma can also form with amplification of the *MYCN* oncogene. Retinoblastomas of this type, termed *MYCNA* are less frequent and may be subject to alternative signaling pathways in the course of proliferation. 
+
+2. eventually noting progression-related changes which are …..and lack of understanding of what they do.  
+Genetic changes to p16^INK4a^ and p130 have been suggested to drive Rb-/- pre-malignant retinomas to formation of Retinoblastoma[@dimaras_loss_2008]. The role of secondary mutations in progression of retinoblastoma was explored by @kooi-somatic-2016 but the comparatively shallow depth of sequencing used may have limited detection of low frequency variants associated with progression of retinoblastoma. 
+
+3. Lack of validated cell lines with known genetic background to explore Rb progression.
+Canonical retinoblastoma cell line models such as *Weri* and *Y79* are well characterized but are subject to genetic drift after extensive laboratory passaging. In addition, evidence indicates that Y79 and Weri lines share extensive genetic background to the extent that Weri may be considered a sub-line of Y79 [@bejjani_rb116:_2012]. Models of RB^MYCNA^ are limited relative to canonical Rb -/- cell lines. A shortage of low passage, well-characterized retinoblastoma cell lines may limit study of complex genetic variants beyond the classical two-hit model, in particular *MYCNA* retinoblastoma.
+
+4. Detection of low frequency variants in heterogeneous tumors.
+We carried out exome sequencing on eleven retinoblastoma tumors along with matched normal and tumor-derived cell lines. We selected a sequencing depth of 150x for normal and cell line samples and 300x for tumor samples. We present supporting evidence for recently identified variants targeting *MYCN* and *BCOR* and SCNAs known to arise in retinoblastoma. We make available ten retinoblastoma cell lines with fully characterized genetic background. Finally, using two of the cell lines featured in the study, we investigate the impact of BCOR deletion and predicted BCOR loss-of-function mutations on growth of retinoblastoma cell lines. 
+
+## Methods
+
+### Methods-Variant Calling Pipeline
+Exome capture sites were defined according to the Agilent Sureselect V5 Capture Library. Sequences were aligned to human reference hg19 using bwa [@li_fast_2010]. Following the GATK best practices workflow for somatic variant discovery, duplicate reads were removed and quality scores were recalibrated. Variant calling was done using GATK Mutect2 for somatic variants between tumor and matched-normal samples.[@depristo_framework_2011; @bateman_fastq_2013]. Putative germline variants were assessed by assembling a panel of normals with mutect2 in variant detection mode. 
+
+### Methods-Variant Filtration
+Variants were removed if they were documented in the Genome Aggregation Database (gnomAD) at an allele frequency greater than ten percent [@lek_analysis_2016]. All admitted variants were marked "PASS" by GATK. Variants were removed if they appeared in the matched normal at greater than zero percent frequency. Variants were also filtered out if they appeared in a panel of normals at greater than 0.4% VAF. Two variants were considered identical when they had identical genomic coordinates, reference and mutant allele sequences, and GATK genotype calls (AA, AB, BB). Only variants that were marked "nonsynonmous", "frameshift", and "nonsense" were admitted into the group. 
+
+### Somatic Copy Number Alteration
+Somatic copy number alteration (SCNA) were detected using off-target reads as described in [@kuilman_copywriter:_2015]. 
+
+### Allelic Imbalance
+Variant sites detected by Mutect2 in any sample were collected into a single .bed file. B allele frequencies for all samples were calculated at these sites. B allele frequency segmentation was performed as described in [@staaf_segmentation-based_2008], yielding a mirrored B allele frequencey(mBAF) representing an abnormal B allele frequency over a given region. A region was designated Allelic Imbalance if mBAF was greater than 0.56, loss of heterozygosity (LOH) if mBAF was greater than 0.7.  
+
+## Results
+
+### Characteristics of the cell lines growth curves
+
+###  clinical characteristics of patients. 
+All are pre-treatment , CHLA, established by either of two protocols (Reynolds and KS), 
+Most eventually  grow similarly. 
+
+
+
+### RB patient characteristics
+```{r patient_chars, echo=FALSE, results='asis'}
+library(pander)
+patient_chars <- read.table("../doc/patient_chars.csv", header = TRUE, sep = ",")
+embed_data(patient_chars, filename="patient_chars.csv", label= "patient characteristics")
+```
+Table 1:, male vs female, age, laterality, etc
+
+### RB1 status in tumors 
+
+```{r rb1_status, echo=FALSE, results='asis'}
+library(pander)
+rb1_status <- read.table("../doc/rb1_status.csv", sep = ",", header=TRUE)
+pander(rb1_status, split.cells = 30, split.table = Inf)
+embed_data(rb1_status, file="rb1_status.csv", label = "RB1 status in tumor and cell line")
+```
+
+### potential germline variants
+```{r potential_germline, echo=FALSE, results='asis'}
+library(pander)
+germline_vars <- read.table("../results/SNV/tidy_pon_rb.csv", sep = ",", header = TRUE)
+embed_data(germline_vars, file="germline_variants.csv", label = "germline variants")
+```
+
+### rb1 somatic tumor variants 
+```{r rb1_t_vars, echo = FALSE, results='asis'}
+rb1_t_vars <- read.table("../results/SNV/20170921_tidy_vcfs_tumors/variants_tidy_table.csv", header = TRUE, sep = ",")
+embed_data(rb1_t_vars, filename="rb1_t_vars.csv", label= "rb1 variants in tumors") 
+```
+
+### rb1 somatic cell line variants 
+```{r rb1_cl_vars, echo = FALSE, results='asis'}
+rb1_cl_vars <- read.table("../results/SNV/20170921_tidy_vcfs_cell_lines/variants_tidy_table.csv", header = TRUE, sep = ",")
+embed_data(rb1_cl_vars, filename="rb1_cl_vars.csv", label= "rb1 variants in cell lines") 
+```
+
+### Somatic Copy Number Alterations
+Somatic copy number alterations (SCNA) were detected in ten of ten samples. Regions of copy number change included 1q, 2p, 6p, 7q and 13q--conistent with [@kooi_meta-analysis_2016]. We detected amplification of 2p in the region spanning the MYCN oncogene [citation needed]. We also found loss in X covering BCOR, previously implicated in retinoblastoma pathogenesis[@zhang_novel_2012]. 
+
+
+![Somatic Copy Number Alterations](../doc/SCNA/heatmap_SCNA.png)
+
+
+### Allelic Imbalance Loss of Heterozygosity
+Regions of loss of heterozygosity with a threshold of 0.7 mBAF are shown in [supplementary info](#supplementary-info-loss-of-heterozygosity). 
+
+### Somatic Variants
+Following variant calling, a total of 643,581 variants were discovered. After filtering out variants that were found in the panel of matched normal controls, 16,348 (16,348/643,581; 2.5%) variants were recorded. After further filtering by pathogenicity, functional annotation, and variant allele frequency (VAF) in gnomAD, a final tally of 679 variants were found (679/16,348; 4%). 
+
+### Recurrence Variants 
+We identified BCOR and RB1 in our samples. [@kooi_somatic_2016] Along with [@zhang_novel_2012]
+
+
+
+## Discussion
+
+1. 
+Previous studies have found that somatic genomic alterations are rare in retinoblastoma [@kooi_somatic_2016]. Our findings are that retinoblastoma variants are almost exclusively within the RB1 gene. We did not find a dramatic increase in recurrent copy number changes despite our aim for increased sequencing depth. The most common variants 
+
+<!-- do I need to show coverage plots? should I refer to supplemental figures? --> 
+
+
+
+#####
+
+### Supplementary Info Somatic Variants
+```{r t_vars, echo = FALSE, results='asis'}
+t_vars <- read.table("../doc/SNV/tumor_variants.csv", header = TRUE, sep = ",")
+embed_data(t_vars, filename="t_vars.csv", label= "variants in tumors") 
+```
+
+### Supplementary Info Somatic Variants
+```{r cl_vars, echo = FALSE, results='asis'}
+cl_vars <- read.table("../doc/SNV/cell_line_variants.csv", header = TRUE, sep = ",")
+embed_data(cl_vars, filename="cl_vars.csv", label= "variants in cell lines") 
+```
+
+### Supplementary Info Somatic Variants between tumor and cell line
+```{r t_cl_vars, echo=FALSE, results='asis'}
+library(pander)
+t_cl_vars <- read.table("../doc/SNV/t_cl_vars.csv", header = TRUE, sep = ",")
+pander(t_cl_vars, split.cells = 30, split.table = Inf)
+embed_data(t_cl_vars, filename="t_cl_vars.csv", label= "variants recurrrent in tumor and cell line")
+```
+
+### Supplementary Info Somatic Variants shared with Kooi 
+```{r tumor_snvs, echo=FALSE, results='asis'}
+library(pander)
+tumor_snvs <- read.table("../doc/SNV/stchlk_kooi_gene_intxn.csv", header = TRUE, sep = ",")
+embed_data(tumor_snvs, filename="tumor_snvs.csv", label = "somatic variants recurrent in Kooi et. al")
+```
+
+### Supplementary Info Loss of Heterozygosity
+```{r loh, echo=FALSE, results='asis'}
+library(pander)
+t_loh <- read.table("../doc/LOH/baf_13_t_20170903.csv", header = TRUE, sep = ",")
+cl_loh <- read.table("../doc/LOH/baf_13_cl_20170903.csv", header = TRUE, sep =",")
+pander(t_loh, split.cells = 30, split.table = Inf)
+pander(cl_loh, split.cells = 30, split.table = Inf)
+embed_data(t_loh, filename="t_loh.csv", label = "loss of heterozygosity in tumor")
+embed_data(cl_loh, filename="cl_loh.csv", label = "loss of heterozygosity in cell line")
+```
+
+### Supplementary Info Regions of SCNA gain/loss
+![mycn gain](../results/SCNA/karyoploter/mycn_coverage.png)
+#### Supplementary Info SCNA regions of MYCN gain 
+```{r mycn_gain, echo=FALSE, results='asis'}
+library(pander)
+mycn_gain <- read.table("../results/SCNA/mycn_peak_genes0_peak_genes.csv", header = TRUE, sep = ",")
+embed_data(mycn_gain, filename="mycn_gain.csv", label = "regions of mycn gain")
+```
+
+![rb1 loss](../results/SCNA/karyoploter/rb1_coverage.png)
+#### Supplementary Info SCNA regions of RB loss
+```{r rb_loss, echo=FALSE, results='asis'}
+library(pander)
+rb_loss <- read.table("../results/SCNA/rb_peak_genes0_peak_genes.csv", header = TRUE, sep = ",")
+embed_data(rb_loss, filename="rb_loss.csv", label = "regions of rb loss")
+```
+![bcor loss](../results/SCNA/karyoploter/bcor_coverage.png)
+
+#### Supplementary Info SCNA regions of BCOR loss 
+```{r bcor_loss, echo=FALSE, results='asis'}
+library(pander)
+bcor_loss <- read.table("../results/SCNA/bcor_peak_genes0_peak_genes.csv", header = TRUE, sep = ",")
+embed_data(bcor_loss, filename="bcor_loss.csv", label = "regions of bcor loss")
+```
+
+### Supplementary Info Exome Coverage
+![cell line coverage](../results/coverage_plots/Rb_exome_cell_lines_partial_samples_20170826.png)    
+![tumor coverage](../results/coverage_plots/Rb_exome_tumors_partial_samples_20170826.png)    
+![normal coverage](../results/coverage_plots/Rb_exome_normals_partial_samples_20170826.png) 
+
+
+#####
+
+### 20170905
+
+1.	Introduction (bullet points)
+2.	Need to check Nautica submitted grant copy
+3.	Results
+    1. Patient characteristics
+        1. Age
+        2. Sex
+        3. Laterality
+        4. Family history
+4.	Culture conditions not established
+    1.	Cell Lines
+5.	Variants of SCNA in 
+    1.	T/N
+    5. Are variants in CNV target regions
+    1. In that tumor?
+    2. In Irsan meta-analysis
+7.	Are these mutations  previously found as private?
+8.	SCNA copy number changes 
+    1.	Previously id’d by Kooi et al
+    2.	Characterize “sub” sCNA in tumors
+        1.	Relative to Kooi data
+9.	Specific changes in CL for either 
+    1.	SCNA
+    2.	Bases
+    
+## 20170903
+1. Need to find variants in samples 14, 20, 24--no variants found after filtering 
+2.	Need to find Irsan’s candidate targets in chromosome 7 and 11 more so others. none in chr11
+    **These included 
+3.	Kooi data includes candidates at less than het levels? YES ABSOLUTELEY
+4.	What percent of samples are germline/hereditary? for RB mutations?
+
+
+## 20170829
+#My own goals
+1. Clarify if noncoding varaints are relevant
+    1. **yes they are but if not annotated as splicing by annovar possibly not? check with DC**
+2. Record information about tumor clonality
+    1. **can only be evaluated by RB variant depth; don't have for all tumors yest**
+3. Get information on LOH
+    1. **need to establish threshold for LOH; and double check lrr input shared from copywriter**
+4. Should I be filtering exactly at 0 AF.NORMAL or be more lenient?
+    1. **should be more lenient**
+
+#DC goals
+1. Addressing RB status in tumor
+    1. Need to check SCNAs with smaller bins
+        1. **lower limit is 5kb based on copywriter capabilities**
+    2. Develop table of tumor RB status
+        1. needs to include coding and noncoding status as well as refaa, altaa
+2. Discussion section
+    1. Develop discussion section regarding evolution of tumor 24 (mycn amp but 13q loss only in cell lines; presence of somatic mutation in 13q cell line?)
+3. Germline Changes in RB
+    1. Improve clinical table of RB bilateral patients
+    2. Run pipeline on tumor 33 to assess capability to detect germline genetic changes
+4. email Kooi about screening at Low VAF
+5. email Carly to check up on 33-N
+6. Get mice for T-43 R&D-seq
+    1. Shahab, Declerck, Seeger may have mice
+
+## 20170824 
+1. Should I do 16q loss correlation with tumor clonality as Kooi did?
+
+## 20170823
+1. Need to move copynumber information to git accessible region
+
+
+##20170821
+
+1. Find BCOR in 28-CL
+    1. provided spreadsheet detailing presence of BCOR in cell lines
+2. Look up PAN2, NAF1 on genecards
+3. Does DNM3 have extra copies? 
+5. establish functional assay for PAN2
+6. Got through all T/CL variants for listing as oncogene or tumor suppressor
+    1. Check COSMIC?
+    provide file tidy_tumors_w_cosmic.csv
+7. Look up Steve Ellidge for oncongene
+8. Identify oncogences selectively increased in VAF in cell lines
+9. Remove pathogenicity as an excluding filter
+10. Identify activating mutations in oncogenes in the literature
+11. check VAF in all data (prefiltered, esp. for PAN2, NAF1)
+12. Add BCOR to where deleted in 14-T, 31-T. Interested in discovering effect as evidenced by 28-T/28-CL discrepancy 
+CHeck for BCORL1 in kooi variants and tidy_vars_tumors
+
+## 20170818 
+
+1. Find BCOR in 28-CL
+    1. examined tidy_cell_lines0 for all variants of BCOR, no trace found in 28-CL see "./doc/20170818/bcor_in_cell_line.csv"
+2. Look up PAN2 and NAF1 in unfiltered results
+    1. 
+
+## 20170807
+1. Need to quantify differnece between Agilent baits, targets, and caputure regions
+2. Need to get metrics of exome coverage
+
+
+## References
+

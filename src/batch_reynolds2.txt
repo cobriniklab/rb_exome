@@ -1,0 +1,10 @@
+data/rb_fastq/cell_line_fastq/196-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/203-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/204-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/215-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/222-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/223-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/224-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/229-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/279-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/292-CL_1.fastq.gz

@@ -1,0 +1,22 @@
+mcevoy_supp_info_notes.txt
+
+pdf contains no relevant info
+
+excel file *700*, sheet UPENN RB1 Mutation Analysis (sheet 10) is relevant
+
+excel file *672* all sheets relevant
+
+1. 1686-16700-1-SP-Coverage Data WGS.csv = mcevoy_quality_scores.csv
+2. 1686-16700-1-SP-SJ RB1 Custom Capture = RB1_genotype_st_jude_UPENN_retinoblastoma_cohorts.csv
+3. 1686-16700-1-SP-Table S1.csv = clinical_pathological_features_retinoblastoma_cohort.csv
+4. 1686-16700-1-SP-Table S2-9-20-13.csv = summary_whole_chromosome_gains_losses_per_sample.csv
+5. 1686-16700-1-SP-Table S3 = individual_whole_chromosome_gains_and_losses_per_sample.csv
+6. 1686-16700-1-SP-Table S4_9_20_13.csv = whole_chromosome_arm_gains_and_losses_in_retinoblastoma
+7. 1686-16700-1-SP-Table S5 = summary_regional_chromosomal_changes_per_sample
+8. 1686-16700-1-SP-Table S6 = regional_chromosomal_gains_and_losses_in_retinoblastomas
+9. 1686-16700-1-SP-Table S7 = differentially_expressed_genes_in_tumors_with_chromosome_arm_gains_losses
+10. 1686-16700-1-SP-Table S8 9-17-13.csv = focal_gains_losses_in_retinoblastomas.csv
+11. 1686-121672-1-SP-RB_Validated_t1_SNV = validated_tier-1_mutations_for_all_ten_retinoblastomas.csv 
+12. 1686-121672-1-SP-RB_Validated_SV = validated_tier-1_mutations_for_all_ten_retinoblastomas_indels
+13. 1686-121672-1-SP-RB_Validated_t1_SNV = validated_tier-1_mutations_for_all_ten_retinoblastomas_snvs
+14. 1686-16700-1-SP-UPENN RB1 Mutation Analysis  = summary_upenn_rb_mutation_analysis

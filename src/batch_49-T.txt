@@ -1,0 +1,1 @@
+data/rb_fastq/trio_fastq/49-T_1.fastq.gz

@@ -1,0 +1,5 @@
+data/rb_fastq/cell_line_fastq/196-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/203-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/204-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/215-CL_1.fastq.gz
+data/rb_fastq/cell_line_fastq/222-CL_1.fastq.gz
