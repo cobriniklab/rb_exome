@@ -1,0 +1,25 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+zhang_supp <- read_csv("~/rb_pipeline/doc/zhang_supp_info/original_format/nature10733-s1.pdf")
+```
+
+```{r}
+zhang_coverage <- read_csv("~/rb_pipeline/doc/zhang_supp_info/tidy_format/zhang_coverage.csv") %>% 
+  dplyr::summarize(mean_cov = mean(`Exon Coverage`), sd_cov = sd(`Exon Coverage`))
+```

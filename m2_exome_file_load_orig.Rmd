@@ -1,0 +1,548 @@
+---
+title: "stchlk_exome_file_load.Rmd"
+author: "Kevin Stachelek"
+date: "1/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+remedy::remedy_opts$set(name = "rb_exome")
+```
+
+
+```{r rb_exome_00, eval = F}
+source("related_functions.R")
+
+```
+
+load rb datasets. Keep in mind that only samples c("24-T", "28-C", "28-T", "29-T", "29-C", "31-T", "31-C", "41-C", "46-T", "46-C", "48-T", "48-C") have ready rb variants detected 
+
+# 1. load packages
+
+```{r rb_exome01, warning=FALSE, include = F}
+library(tidyverse)
+library(stchlkExome)
+suppressMessages(library(EnsDb.Hsapiens.v86))
+edb <- EnsDb.Hsapiens.v86
+library(org.Hs.eg.db)
+library(ggrepel)
+library(S4Vectors)
+library(ensemblVEP)
+library(plyranges)
+library(glue)
+library(data.table)
+library(rprojroot)
+library(fs)
+library(GenVisR)
+library(gridExtra)
+library(WebGestaltR)
+
+proj_dir = proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+
+sample_types <- c("tumors", "cell_lines", "normals", "reynolds")
+
+```
+
+# 2. vcf filenames
+
+### filtered
+
+```{r rb_exome02b}
+#variants w/ vc filtering
+m2_tumor_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-T_1_mutect2vc_filtered.vcf$", full.names = TRUE)
+m2_cell_line_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-CL_1_mutect2vc_filtered.vcf$", full.names = TRUE)
+m2_pon_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-N_1_mutect2vc_filtered.vcf$", full.names = TRUE)
+m2_reynolds_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{3}-CL_1_mutect2vc_filtered.vcf$", full.names = TRUE)
+
+```
+
+### unfiltered
+
+```{r rb_exome02}
+#clinvar <-  read_tsv('../Homo_sapiens/ClinVar/clinvar_alleles.single.b37.tsv',sep='\t',header=T,quote='',comment.char='')
+
+# load input --------------------------------------------------------------
+# variants w/o vc filtering 
+m2_tumor_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-T_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_cell_line_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-CL_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_pon_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{2}-N_1_mutect2_vep.vcf$", full.names = TRUE)
+m2_reynolds_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/mutect2", pattern="^[[:digit:]]{3}-CL_1_mutect2_vep.vcf$", full.names = TRUE)
+```
+
+
+
+# 3. read mutect2 vcf files
+
+### filtered
+
+```{r rb_exome03}
+filtered_filenames <- list(m2_tumor_filenames, 
+                  m2_cell_line_filenames,
+                  m2_pon_filenames,
+                  m2_reynolds_filenames)
+
+filtered_sample_types <- list("m2_tumor",
+                     "m2_cell_line",
+                     "m2_normal",
+                     "m2_reynolds")
+
+# load and save vcflists
+vcf_lists <- purrr::map2(filtered_filenames, filtered_sample_types, load_vcfs)
+```
+
+### unfiltered
+
+```{r rb_exome03b}
+# unfiltered_filenames <- list(m2_tumor_unfiltered_filenames, 
+#                   m2_cell_line_unfiltered_filenames,
+#                   m2_pon_unfiltered_filenames,
+#                   m2_reynolds_unfiltered_filenames)
+# 
+# unfiltered_sample_types <- list("m2_tumor_unfiltered",
+#                      "m2_cell_line_unfiltered",
+#                      "m2_normal_unfiltered",
+#                      "m2_reynolds_unfiltered")
+
+unfiltered_filenames <- list(m2_tumor_unfiltered_filenames, 
+                  m2_cell_line_unfiltered_filenames)
+
+unfiltered_sample_types <- list("m2_tumor_unfiltered",
+                     "m2_cell_line_unfiltered")
+
+# load and save vcflists
+vcf_lists <- purrr::map2(unfiltered_filenames, unfiltered_sample_types, load_vcfs)
+```
+
+
+# 4. load m2 vcf rds files
+
+```{r rb_exome04}
+filtered_vcf_lists <- paste0("~/rb_pipeline/results/SNV/m2_", c("cell_line", "tumor", "normal", "reynolds"), "_list.rds") %>% 
+  purrr::map(readRDS)
+```
+
+
+```{r rb_exome04b}
+unfiltered_vcf_lists <- paste0("~/rb_pipeline/results/SNV/m2_", c("cell_line", "tumor", "normal", "reynolds"), "_unfiltered_list.rds") %>% 
+  purrr::map(readRDS)
+
+```
+
+# 5. collate m2 vcfs to tibble
+
+### filtered
+
+```{r rb_exome05}
+tidy_functions <- list(mutect2_tn_tidy, mutect2_tn_tidy, mutect2_pon_tidy, mutect2_pon_tidy)
+m2_types <- list("tn", "tn", "pon", "pon")
+
+filtered_vcf_lists <- purrr::map2(filtered_vcf_lists, m2_types, ~structure(.x, class = .y))
+
+m2_tidy_samples <- purrr::map2(filtered_vcf_lists, tidy_functions, collate_vcfs)
+```
+
+### unfiltered
+
+```{r rb_exome05}
+tidy_functions <- list(mutect2_tn_tidy, mutect2_tn_tidy, mutect2_pon_tidy, mutect2_pon_tidy)
+m2_types <- list("tn", "tn", "pon", "pon")
+
+unfiltered_vcf_lists <- purrr::map2(unfiltered_vcf_lists, m2_types, ~structure(.x, class = .y))
+
+m2_tidy_samples_unfiltered <- purrr::map2(unfiltered_vcf_lists, tidy_functions, collate_vcfs)
+```
+
+# 6. save collated m2 vcfs
+
+### filtered
+
+```{r rb_exome05b}
+sample_types <- c("tumors", "cell_lines", "normals", "reynolds")
+
+names(m2_tidy_samples) <- sample_types
+
+# save raw variant caller files------------------------------
+m2_collated_vars_ps <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, ".rds"))
+
+map2(m2_tidy_samples, m2_collated_vars_ps, saveRDS)
+
+```
+
+### unfiltered
+
+```{r rb_exome05b}
+sample_types <- c("tumors", "cell_lines", "normals", "reynolds")
+
+names(m2_tidy_samples_unfiltered) <- sample_types
+
+# save raw variant caller files------------------------------
+m2_collated_vars_ps <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, "_unfiltered.rds"))
+
+map2(m2_tidy_samples_unfiltered, m2_collated_vars_ps, saveRDS)
+
+```
+
+# 6. load unrefined m2 variants
+
+### filtered
+
+```{r rb_exome06}
+m2_collated_vars_ps <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, ".rds"))
+
+filter_vars <- function(vars){
+  vars <- vars %>% 
+    dplyr::filter(FILTER %in% c(".", "PASS")) %>% 
+    dplyr::filter(!is.na(HGVSc)) %>% 
+    identity()
+}
+
+m2_collated_vars <- map(m2_collated_vars_ps, readRDS) %>% 
+  purrr::map(filter_vars) %>% 
+  set_names(sample_types) %>% 
+  identity()
+
+purrr::map2(c("m2_vc_tumors", "m2_vc_cell_lines", "m2_vc_normals", "m2_vc_reynolds"), m2_collated_vars, print_tl)
+
+```
+
+### unfiltered
+
+```{r rb_exome06b}
+m2_collated_vars_ps_unfiltered <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, "_unfiltered.rds"))
+
+filter_vars <- function(vars){
+  vars <- vars %>% 
+    dplyr::filter(FILTER %in% c(".", "PASS")) %>% 
+    dplyr::filter(!is.na(HGVSc)) %>% 
+    identity()
+}
+
+m2_collated_vars_unfiltered <- 
+  m2_collated_vars_ps_unfiltered %>% 
+  purrr::map(readRDS) %>% 
+  # purrr::map(filter_vars) %>%
+  purrr::set_names(sample_types) %>% 
+  identity()
+
+purrr::map2(c("m2_vc_tumors", "m2_vc_cell_lines", "m2_vc_normals", "m2_vc_reynolds"), m2_collated_vars_unfiltered, print_tl)
+
+```
+
+# 7. panel of normals and variant caller filter m2 variants
+
+### filtered
+
+```{r rb_exome07}
+
+m2_tidy_samples <- m2_collated_vars
+
+m2_tidy_samples$reynolds <- dplyr::rename(m2_tidy_samples$reynolds, GT.TUMOR = GT)
+
+reference_samples <- m2_tidy_samples[c("tumors", "cell_lines", "reynolds")]
+
+# anti join panel of normals variants
+m2_tidy_samples <- purrr::map(reference_samples, pon_subtract_m2_vars, m2_tidy_samples[["normals"]])
+
+m2_somatic_vars_paths <- paste0("~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_", c("tumors", "cell_lines", "reynolds"), ".rds")
+
+purrr::map2(m2_tidy_samples, m2_somatic_vars_paths, saveRDS)
+
+```
+
+### unfiltered
+
+```{r rb_exome07}
+
+m2_tidy_samples <- m2_collated_vars_unfiltered
+
+m2_tidy_samples$reynolds <- dplyr::rename(m2_tidy_samples$reynolds, GT.TUMOR = GT)
+
+reference_samples <- m2_tidy_samples[c("tumors", "cell_lines", "reynolds")]
+
+# anti join panel of normals variants
+m2_tidy_samples <- purrr::map(reference_samples, pon_subtract_m2_vars, m2_tidy_samples[["normals"]])
+
+m2_somatic_vars_paths <- paste0("~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_", c("tumors", "cell_lines", "reynolds"), "_unfiltered.rds")
+
+purrr::map2(m2_tidy_samples, m2_somatic_vars_paths, saveRDS)
+
+```
+
+
+# 8. load pon subtracted mutect2 variants
+
+### filtered
+
+```{r rb_exome08}
+
+sample_types <- c("tumors", "cell_lines", "reynolds")
+
+m2_somatic_vars_paths <- paste0("~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_", sample_types, ".rds") %>% 
+  set_names(sample_types)
+
+m2_tidy_samples <- purrr::map(m2_somatic_vars_paths, readRDS)
+
+purrr::map2(c("tumors", "cell_lines", "reynolds"), m2_tidy_samples, print_tl)
+```
+
+### unfiltered
+
+```{r rb_exome08}
+
+sample_types <- c("tumors", "cell_lines", "reynolds")
+
+m2_somatic_vars_paths <- paste0("~/rb_pipeline/results/SNV/mutect2_variants_wo_pon_", sample_types, "_unfiltered.rds") %>% 
+  set_names(sample_types)
+
+m2_tidy_samples <- purrr::map(m2_somatic_vars_paths, readRDS)
+
+purrr::map2(c("tumors", "cell_lines", "reynolds"), m2_tidy_samples, print_tl)
+```
+
+
+# 9. refine and create table of all mutect2 somatic variants
+
+### filtered
+
+```{r rb_exome09}
+
+# select columns to enable clean rbinding of mutect2 variants
+
+m2_tidy_tumors <- m2_tidy_samples$tumors
+
+m2_tidy_cell_lines <- dplyr::select(m2_tidy_samples$cell_lines, colnames(m2_tidy_samples$tumors)) %>% 
+  identity()
+
+min_colnames <- colnames(m2_tidy_samples$tumors)[!(grepl("NORMAL", colnames(m2_tidy_samples$tumors)))]
+
+min_colnames <- c(min_colnames, "GT", "AF", "AD.1", "AD.2")
+
+m2_tidy_reynolds <- dplyr::select(m2_tidy_samples$reynolds, one_of(min_colnames)) %>% 
+  identity()
+
+# filter mutect2 variants
+unfiltered_vars <- list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds)
+
+m2_vcall_filt_vars_list <- purrr::map(list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds), ~dplyr::filter(.x, FILTER == "."))
+
+m2_somatic_vars_list <- purrr::map2(list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds), c("tn", "tn", "pon"), filter_variant_set) %>% 
+  set_names(c("vc_T", "vc_CL", "reynolds_CL"))
+
+m2_filt_variant_paths <- paste0("~/rb_pipeline/results/SNV/", c("clean_vc_tumor_variants.txt", "clean_vc_cell_line_variants.txt", "clean_reynolds_cell_line_variants.txt"))
+
+purrr::map2(m2_somatic_vars_list, m2_filt_variant_paths, write_tsv)
+
+# combine all mutect2 variants into a single list 
+m2_somatic_vars <- dplyr::bind_rows(m2_somatic_vars_list) %>%
+  dplyr::select(sample, SYMBOL, everything()) %>% 
+  identity()
+
+# save mutect2 variant df
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants.rds"
+
+
+```
+
+### unfiltered
+
+```{r rb_exome09}
+
+# select columns to enable clean rbinding of mutect2 variants
+
+m2_tidy_tumors <- m2_tidy_samples$tumors
+
+m2_tidy_cell_lines <- dplyr::select(m2_tidy_samples$cell_lines, colnames(m2_tidy_samples$tumors)) %>% 
+  identity()
+
+min_colnames <- colnames(m2_tidy_samples$tumors)[!(grepl("NORMAL", colnames(m2_tidy_samples$tumors)))]
+
+min_colnames <- c(min_colnames, "GT", "AF", "AD.1", "AD.2")
+
+m2_tidy_reynolds <- dplyr::select(m2_tidy_samples$reynolds, one_of(min_colnames)) %>% 
+  identity()
+
+# filter mutect2 variants
+unfiltered_vars <- list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds)
+
+m2_vcall_filt_vars_list <- purrr::map(list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds), ~dplyr::filter(.x, FILTER == "."))
+
+m2_somatic_vars_list <- purrr::map2(list(m2_tidy_tumors, m2_tidy_cell_lines, m2_tidy_reynolds), c("tn", "tn", "pon"), filter_variant_set) %>% 
+  set_names(c("vc_T", "vc_CL", "reynolds_CL"))
+
+m2_filt_variant_paths <- paste0("~/rb_pipeline/results/SNV/", c("clean_vc_tumor_variants.txt", "clean_vc_cell_line_variants.txt", "clean_reynolds_cell_line_variants.txt"))
+
+purrr::map2(m2_somatic_vars_list, m2_filt_variant_paths, write_tsv)
+
+# combine all mutect2 variants into a single list 
+m2_somatic_vars <- dplyr::bind_rows(m2_somatic_vars_list) %>%
+  dplyr::select(sample, SYMBOL, everything()) %>% 
+  identity()
+
+# save mutect2 variant df
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants_unfiltered.rds"
+
+saveRDS(m2_somatic_vars, m2_var_path)
+
+
+```
+
+# 10. load custom filtered m2 vars
+
+### filtered
+
+```{r rb_exome10}
+
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants.rds"
+m2_somatic_vars <- readRDS(m2_var_path)
+
+# retrieve split list of m2 variants
+m2_somatic_vars_list <- split_m2_somatic_vars(m2_somatic_vars)
+
+purrr::map2(m2_somatic_vars_list, names(m2_somatic_vars_list), print_tl)
+
+```
+
+### unfiltered
+
+```{r rb_exome10}
+
+m2_var_path <- "~/rb_pipeline/results/SNV/mutect2_variants_unfiltered.rds"
+m2_somatic_vars <- readRDS(m2_var_path)
+
+# retrieve split list of m2 variants
+m2_somatic_vars_list <- split_m2_somatic_vars(m2_somatic_vars)
+
+purrr::map2(m2_somatic_vars_list, names(m2_somatic_vars_list), print_tl)
+
+```
+
+
+# 2. collate RB1 mutect2 variants for all samples
+
+```{r rb_exome13}
+
+tidy_and_select_rb <- function(variants){
+  # browser()
+  variants <- variants[variants$SYMBOL == "RB1" & !is.na(variants$genename),]
+  variants <- variants[,c("sample", "seqnames", "start", "end", "AF.TUMOR")]
+}
+
+m2_somatic_vars_rb <- tidy_and_select_rb(m2_somatic_vars)
+
+rb1_var_from_bam_igv <- read_csv("~/rb_pipeline/results/rb1_var_not_mutect2.csv")
+# tidy_rb_variants <- rbindlist(list(m2_tidy_tumors_rb, m2_tidy_cell_lines_rb, m2_tidy_reynolds_rb, rb1_var_from_bam_igv)) %>% 
+#   arrange(sample)
+
+tidy_rb_variants <- rbindlist(list(m2_somatic_vars_rb, rb1_var_from_bam_igv), fill = T) %>% 
+  arrange(sample)
+
+rb1_status_old <- read_csv("~/rb_pipeline/doc/rb1_status_old.csv") %>% 
+  dplyr::select(-c(somatic.snv.VAF, somatic.snv.AAchange, germline.snv.VAF, germline.snv.AAchange))
+
+rb1_status <- full_join(tidy_rb_variants, rb1_status_old, by = c("sample" = "Sample.ID")) %>% 
+  dplyr::rename(chrom = seqnames)
+
+rb1_status <- rb1_status[gtools::mixedorder(rb1_status$sample),]
+
+write_csv(rb1_status, "~/rb_pipeline/doc/RB_exome_manuscript/rb1_status2.csv")
+
+
+```
+
+# 3. Reported Vision Center Variants
+
+```{r rb_exome14}
+
+# reported m2 somatic vars
+# filter by gatk filter and pathogenicity
+
+m2_vc_somatic_vars <- bind_rows(m2_somatic_vars_list$vc_CL, m2_somatic_vars_list$vc_T)
+
+reported_m2_vc_somatic_vars <- filter(m2_vc_somatic_vars, FILTER == ".") %>% 
+  filter(path_meta_score >= 2) %>% 
+  select(sample, SYMBOL, HGVSc, HGVSp, everything()) %>%
+  dplyr::group_by(sample, paramRangeID, SYMBOL) %>% # each variant has >1 protein product, need to filter each down to one
+  dplyr::filter(row_number() == 1) %>%
+  dplyr::filter(!is.na(SYMBOL)) %>% 
+  identity() 
+
+# write_csv(reported_m2_vc_somatic_vars, "../doc/RB_exome_manuscript/SNV/reported_m2_vc_somatic_variants.csv")
+
+```
+
+# 4. Reported Reynolds Variants
+
+```{r rb_exome15}
+
+# reported m2 somatic vars 
+# filter by gatk filter and pathogenicity
+
+m2_reynolds_somatic_vars <- m2_somatic_vars_list$reynolds_CL
+
+reported_m2_reynolds_somatic_vars <- filter(m2_reynolds_somatic_vars, FILTER == ".") %>% 
+  filter(path_meta_score >= 2) %>% 
+  select(sample, SYMBOL, HGVSc, HGVSp, everything()) %>%
+  dplyr::group_by(sample, paramRangeID, SYMBOL) %>% # each variant has >1 protein product, need to filter each down to one
+  dplyr::filter(row_number() == 1) %>%
+  dplyr::filter(!is.na(SYMBOL)) %>% 
+  dplyr::filter(!is.na(HGVSc)) %>% 
+  identity() 
+
+# write_csv(reported_m2_reynolds_somatic_vars, "../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv")
+
+```
+
+
+# 5. load reported variants
+
+```{r rb_exome16}
+reported_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_vc_somatic_variants.csv"
+reported_m2_vc_somatic_vars <- read_csv(reported_vars_path)
+
+reported_cl_vars <- dplyr::filter(reported_m2_vc_somatic_vars, grepl("CL", sample))
+write_csv(reported_cl_vars, "SNV/clean_vc_cell_line_variants.csv")
+print_tl(reported_cl_vars, "final m2 cl variants")
+
+reported_t_vars <- dplyr::filter(reported_m2_vc_somatic_vars, grepl("T", sample))
+write_csv(reported_t_vars, "SNV/clean_vc_tumor_variants.csv")
+print_tl(reported_t_vars, "final m2 t variants")
+
+#### load reported reynolds variants
+reported_m2_reynolds_somatic_vars <- read_csv("../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv")
+
+short_stat <- function(stat_function, vector){
+  signif(stat_function(vector), digits = 2)
+}
+
+t_vars_by_sample <- as.numeric(table(reported_t_vars$sample))
+glue::glue("{short_stat(mean, sample_df)} +/- {short_stat(sd, sample_df)} range {min(sample_df)}-{max(sample_df)}", sample_df = t_vars_by_sample)
+
+cl_vars_by_sample <- as.numeric(table(reported_cl_vars$sample))
+glue::glue("{short_stat(mean, sample_df)} +/- {short_stat(sd, sample_df)} range {min(sample_df)}-{max(sample_df)}", sample_df = cl_vars_by_sample)
+
+```
+
+# 11. plot average VAF per sample
+
+```{r rb_exome11}
+
+ggplot(m2_somatic_vars, aes(x = AF.TUMOR, y = sample)) + geom_density_ridges()
+
+```
+
+# 12. box plot somatic variants per sample
+
+```{r rb_exome12}
+vc_somatic_vars <- dplyr::filter(m2_somatic_vars, !grepl("[0-9]{3}-CL", sample)) %>% 
+  ungroup() %>% 
+  dplyr::count(sample) %>% 
+  mutate(sample_type = ifelse(grepl("T", sample), "Tumor", "Cell Line"))
+
+ggplot(vc_somatic_vars, aes(x = sample_type, y = n, label = sample)) + 
+  scale_y_log10() + 
+  geom_boxplot() + 
+  geom_text_repel(color = "red", cex = 2.5)
+
+```
+

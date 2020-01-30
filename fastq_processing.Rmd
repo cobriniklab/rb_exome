@@ -1,0 +1,67 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(janitor)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+multiqc_data <- read_tsv("../output/multiqc_data/multiqc_fastqc.txt")
+
+```
+
+```{r}
+# 50390601 bp
+agilent_sureselect_length = 50390601
+
+fastqc_all <- multiqc_data %>% 
+  clean_names() %>% 
+  mutate(sample_type = case_when(grepl("CL", sample) ~ "cell_line",
+                                 grepl("N", sample) ~ "normal",
+                                 grepl("T", sample) ~ "tumor",
+                                 )) %>% 
+  identity()
+
+fastqc_split_pairs <- fastqc_all %>% 
+  mutate(coverage = (avg_sequence_length * total_sequences)/agilent_sureselect_length) %>% 
+  identity()
+  
+
+calc_sample_type_coverage <- function(fastqc_df) {
+  fastqc_pair_merged <- fastqc_df %>% 
+    mutate(sample = str_extract(sample, pattern = "[0-9]+-[A-Z]+")) %>% 
+    group_by(sample) %>% 
+    summarize(total_sequences = sum(total_sequences), avg_sequence_length = first(avg_sequence_length)) %>% 
+    mutate(total_bases = avg_sequence_length * total_sequences) %>% 
+    mutate(coverage = (total_bases)/agilent_sureselect_length) %>% 
+    identity()
+}
+
+sequence_length <- split(fastqc_all, fastqc_all$sample_type) %>% 
+  map(calc_sample_type_coverage) %>%
+  map(~summarize(.x, mean_reads = mean(total_sequences/1e6), sd_reads = sd(total_sequences)/1e6)) %>%
+  # map(~mutate(.x, mean_Mb_reads = mean_reads/1e6)) %>%
+  identity()
+
+coverage <- split(fastqc_all, fastqc_all$sample_type) %>% 
+  map(calc_sample_type_coverage) %>%
+  map(~summarize(.x, mean_coverage = mean(coverage))) %>%
+  identity()
+
+
+
+
+
+
+```

@@ -1,0 +1,48 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+cov_cols <- c("On target coverage (Tumor)", "On target coverage (Control)")
+
+test <- read_delim("~/rb_pipeline/doc/grobner_supp_info/S_Table2.csv", delim = ";", skip = 3) %>% 
+  dplyr::filter(`Cancer Type` == "RB") %>% 
+  dplyr::filter(!is.na(`On target coverage (Tumor)`)) %>% 
+  dplyr::mutate_at(cov_cols, ~as.numeric(gsub("x", "", .))) %>%
+  dplyr::summarize(t_cov_mean = mean(`On target coverage (Tumor)`), n_cov_mean = mean(`On target coverage (Control)`), t_cov_sd = sd(`On target coverage (Tumor)`), n_cov_sd = sd(`On target coverage (Control)`)) %>%
+  identity()
+  
+```
+
+```{r}
+somatic_burden <- read_delim("~/rb_pipeline/doc/grobner_supp_info/S_Table3.csv", delim = ";", skip = 2) %>%
+  janitor::clean_names() %>% 
+  group_by(cancer_type) %>% 
+  summarize(mutation_rate = median(total_mutations_per_mb)) %>%
+  identity()
+
+rb_mutation_rate <- somatic_burden[somatic_burden$cancer_type == "RB",]$mutation_rate
+
+rb_mutation_rate
+
+median(somatic_burden$mutation_rate)
+
+max(somatic_burden$mutation_rate)
+
+min(somatic_burden$mutation_rate)
+
+
+```

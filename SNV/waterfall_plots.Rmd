@@ -1,0 +1,169 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+
+# load packages ------------------------------
+library(GenVisR)
+library(gridExtra)
+library(stchlkExome)
+
+
+```
+
+# load data-----------------------------
+```{r }
+
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+all_author_variants <- read_csv(all_author_variants_path)
+```
+
+# waterfall plot all author cl t
+
+```{r }
+
+stachelek_clindata  = read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_01.csv") %>%
+  janitor::clean_names() %>%
+  prep_stachelek_clindata() %>%
+  identity()
+
+all_author_vars_cl_t <- 
+  all_author_variants %>% 
+  dplyr::left_join(stachelek_clindata, by = c("sample", "series")) %>%
+  identity()
+
+clindata_cols <- c(colnames(stachelek_clindata), "author", "series")
+
+clindata = dplyr::ungroup(all_author_vars_cl_t) %>% 
+  dplyr::select(one_of(clindata_cols)) %>% 
+  dplyr::mutate(series = dplyr::coalesce(series, author)) %>%
+  dplyr::distinct() %>%
+  identity()
+
+all_author_vars_cl_t_grob <- make_waterfall_plot(all_author_vars_cl_t, clindata = clindata, gene_lab_size = 4, mainLabelSize = 4)
+
+ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_s08a.pdf", 
+       plot = all_author_vars_cl_t_grob, 
+       width = 24,
+       height = 24)
+
+plot(all_author_vars_cl_t_grob)
+```
+
+# waterfall plot all author t
+
+```{r }
+
+
+stachelek_clindata  = read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_01.csv") %>%
+  janitor::clean_names() %>%
+  prep_stachelek_clindata() %>%
+  mutate(sample = as.character(sample)) %>%
+  identity()
+
+all_author_vars_t <- 
+  all_author_variants %>% 
+  
+  dplyr::full_join(stachelek_clindata, by = c("sample", "series")) %>% 
+  mutate(sample_type = ifelse(grepl("CL", sample), "Cell Line", "Tumor")) %>%
+  dplyr::filter(!grepl("CL", sample)) %>% 
+  identity()
+
+clindata_cols <- c(colnames(stachelek_clindata), "author")
+
+clindata = dplyr::ungroup(all_author_vars_t) %>% 
+  dplyr::select(one_of(clindata_cols)) %>% 
+  dplyr::mutate(series = dplyr::coalesce(series, author)) %>% 
+  dplyr::distinct()
+
+all_author_vars_t_grob <- make_waterfall_plot(all_author_vars_t, clindata = clindata, gene_lab_size = 4, mainLabelSize = 4)
+
+ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_s08b.pdf", 
+       plot = all_author_vars_t_grob, 
+       width = 24,
+       height = 24)
+
+plot(all_author_vars_t_grob)
+```
+
+# waterfall plot recurrent cl t
+
+```{r }
+
+rvctcl_vars_rough <- read_csv("~/rb_pipeline/results/SNV/recurrent_vars.csv")
+
+stachelek_clindata  = read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_01.csv") %>%
+  janitor::clean_names() %>%
+  prep_stachelek_clindata() %>%
+  mutate(sample = as.character(sample)) %>%
+  identity()
+
+rvctcl_vars_rough <- read_csv("~/rb_pipeline/results/SNV/recurrent_vars.csv")
+
+recurrent_vars_cl_t <- 
+  rvctcl_vars_rough %>% 
+  dplyr::left_join(stachelek_clindata, by = c("sample", "series")) %>% 
+  identity()
+
+clindata_cols <- c(colnames(stachelek_clindata), "author")
+
+clindata = dplyr::ungroup(recurrent_vars_cl_t) %>% 
+  dplyr::select(one_of(clindata_cols)) %>% 
+  dplyr::mutate(series = dplyr::coalesce(series, author)) %>% 
+  dplyr::distinct()
+
+recurrent_vars_cl_t_grob <- make_waterfall_plot(recurrent_vars_cl_t, clindata = clindata, gene_lab_size = 12, mainLabelSize = 12)
+
+ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_s08c.pdf", 
+       plot = recurrent_vars_cl_t_grob, 
+       width = 36,
+       height = 12)
+
+plot(recurrent_vars_cl_t_grob)
+
+```
+
+# waterfall plot recurrent t
+
+
+```{r }
+
+stachelek_clindata  = read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_01.csv") %>%
+  janitor::clean_names() %>%
+  prep_stachelek_clindata() %>%
+  mutate(sample = as.character(sample)) %>%
+  identity()
+
+rvctcl_vars_rough <- read_csv("~/rb_pipeline/results/SNV/recurrent_vars.csv")
+
+recurrent_vars_t <- 
+  rvctcl_vars_rough %>% 
+  dplyr::left_join(stachelek_clindata, by = c("sample", "series")) %>% 
+  dplyr::filter(!grepl("CL", sample)) %>%
+  identity()
+
+clindata_cols <- c(colnames(stachelek_clindata), "author")
+
+clindata = dplyr::ungroup(recurrent_vars_t) %>% 
+  dplyr::select(one_of(clindata_cols)) %>% 
+  dplyr::mutate(series = dplyr::coalesce(series, author)) %>% 
+  dplyr::distinct()
+
+recurrent_vars_t_grob <- make_waterfall_plot(recurrent_vars_t, clindata = clindata, gene_lab_size = 12, mainLabelSize = 12)
+
+ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_s08d.pdf", 
+       plot = recurrent_vars_t_grob, 
+       width = 18,
+       height = 12)
+
+plot(recurrent_vars_t_grob)
+```

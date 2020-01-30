@@ -1,0 +1,96 @@
+---
+title: "Variant Caller Stats"
+output:
+  html_document:
+    df_print: paged
+bibliography: "../rb_exome_manuscript.bib"
+csl: "/home/skevin/.cache/R/seasl/styles/cell.csl"
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+library(tabulizer)
+```
+
+```{r, eval = F}
+pdf_file <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs42003-018-0023-9/MediaObjects/42003_2018_23_MOESM1_ESM.pdf"
+
+narzisi_stats <- extract_tables(pdf_file, pages = 22)
+
+narzisi_df <- as_tibble(narzisi_stats[[2]]) %>% 
+  set_names(c("varcaller", "# of calls", "True Positive", "False Positive", "False Negative", "Recall", "Precision", "FDR", "F1score", "Max F1score")) %>% 
+  identity()
+  
+
+require(knitr)
+kable(narzisi_df, digits = 3, row.names = FALSE, align = "c",
+              caption = NULL)
+
+
+```
+
+## Narzisi Indels
+
+```{r}
+narzisi_indels <- tibble::tribble(
+  ~Variant.Caller, ~X..of.calls., ~True.positive., ~False.positive., ~False.negative., ~Recall., ~Precision., ~FDR., ~F1.scorea., ~Max.F1.scoreb.,
+        "Lancet ",          3891,            3586,              305,             1359,     0.72,        0.92, 0.078,        0.81,            0.81,
+      "Strelka2 ",          4514,            3647,              867,             1298,     0.73,        0.81, 0.192,        0.77,            0.78,
+        "LoFreq ",          4853,            3210,             1652,             1744,     0.64,        0.66,  0.34,        0.65,            0.67,
+       "MuTect2 ",          4873,            2712,             2071,             2233,     0.54,        0.56, 0.432,        0.55,            0.58,
+       "Strelka ",          1846,            1793,               53,             3152,     0.36,        0.97, 0.028,        0.52,            0.71
+  )
+
+require(knitr)
+kable(narzisi_indels, digits = 3, row.names = FALSE, align = "c",
+              caption = NULL)
+
+```
+
+## Narzisi SNVs
+
+```{r}
+narzisi_snvs <- tibble::tribble(
+  ~Variant.Caller, ~X..of.calls, ~True.positive, ~False.positive, ~False.negative, ~Recall, ~Precision,  ~FDR, ~F1.scorea, ~Max.F1.scoreb,
+         "Lancet",     "24,413",       "23,848",             565,          "7744",    0.75,       0.98, 0.023,       0.85,           0.85,
+       "Strelka2",     "25,249",       "24,132",            1117,          "7460",    0.76,       0.96, 0.044,       0.85,           0.85,
+        "Strelka",     "23,891",       "22,741",            1150,          "8851",    0.72,       0.95, 0.048,       0.82,           0.82,
+         "MuTect",     "50,228",       "23,713",            2792,          "7879",    0.75,       0.89, 0.055,       0.82,           0.82,
+        "MuTect2",     "23,779",       "20,393",            3386,        "11,199",    0.65,       0.86, 0.142,       0.74,           0.74,
+         "LoFreq",       "9404",         "9370",              34,        "22,222",     0.3,       0.99, 0.003,       0.46,           0.46
+  )
+
+require(knitr)
+kable(narzisi_snvs, digits = 3, row.names = FALSE, align = "c",
+              caption = NULL)
+
+```
+
+[@narzisiGenomewideSomaticVariant2018]
+
+```{r}
+wes_stats <- tibble::tribble(
+                                      ~Method,       ~Varscan, ~SomaticSniper,       ~Strelka,      ~MuTect2,
+                             "Total variants",         "7957",         "9826",         "6441",        "4952",
+                             "HAAIC variants", "2156", "2319",   "380",  "228",
+                 "Variants with strand biasa",   "286",    "20",    "39",   "10",
+  "Variants with >2 observations in controls", "4042", "7006",  "715",  "560",
+                  "Variants present in dbSNP", "3724", "6976", "1024", "738",
+                "Variants present in COSMICb",   "374",   "452",   "309",  "352"
+  )
+require(knitr)
+kable(wes_stats, digits = 3, row.names = FALSE, align = "c",
+              caption = NULL)
+
+
+```
+
+[@caiIndepthComparisonSomatic2016]

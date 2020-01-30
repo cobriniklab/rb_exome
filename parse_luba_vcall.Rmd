@@ -1,0 +1,130 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(cowplot)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r }
+split_af <- function(df){
+  df <- 
+  df %>% 
+  tidyr::separate_rows(allele_frequencies, sep = "; ") %>%
+  tidyr::separate(allele_frequencies, into = c("alt", "af"), sep = ": ") %>% 
+  dplyr::mutate(af = as.numeric(as.character(af)))
+}
+
+combine_af <- function(df){
+  df <- 
+    df %>% 
+    dplyr::mutate(allele_frequencies = paste0(alt, ": ", af)) %>%
+    dplyr::group_by(sample_id, seqnames, start) %>%
+    dplyr::mutate(allele_frequencies = paste0(allele_frequencies, collapse = "; ")) %>%
+    identity()
+}
+```
+
+```{r }
+luba_vcall_pileups <- fs::path(proj_dir, "output", "luba") %>% 
+  dir_ls() %>% 
+  path_filter("*.txt") %>% 
+  purrr::set_names(fs::path_file(.))
+
+# pileups <- purrr::map(luba_vcall_pileups, read.table, fill = T, row.names = NULL, header = T)
+
+pileups <- purrr::map(luba_vcall_pileups, read_tsv, skip = 4)
+
+
+calc_AF <- function(readcount_df){
+  readcount_df <- 
+    readcount_df %>% 
+    # tidyr::gather(A, C, G, T, INS, DEL, key = "allele", value = "allele_info") %>%
+    # tidyr::separate(TOTAL, into = c("read_depth", "filtered_read_depth"), sep = "/") %>%
+    # tidyr::separate(allele_info, into = c("alt", "alt_info"), sep = ":") %>%
+    # dplyr::rename(seqnames = V1, start = V2, ref = V3, read_depth = V4, ref_info = V5) %>%
+    # dplyr::mutate(alt_info = stringr::str_remove(alt_info, "^:")) %>%
+    # tidyr::separate(alt_info, into = c("alt_depth", "alt_info"), sep = ":.*") %>%
+    # dplyr::mutate_at(c("alt_depth", "read_depth"), .funs=funs(as.numeric(as.character(.)))) %>%
+    # dplyr::select(-allele, -alt_info, -ref_info) %>%
+    # dplyr::mutate(af = alt_depth / read_depth) %>%
+    # dplyr::arrange(seqnames, start, desc(af)) %>%
+    # dplyr::mutate(start = as.factor(start)) %>%
+    # dplyr::filter(af > 0) %>%
+    identity()
+}
+
+brc <- purrr::map(pileups, calc_AF) %>% 
+  # dplyr::bind_rows(.id = "sample_id") %>%
+  # dplyr::mutate(sample_id = stringr::str_remove(sample_id, "_.*")) %>%
+  # dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>%
+  # dplyr::distinct() %>%
+  # combine_af() %>% 
+  # # dplyr::filter(ref == alt) %>%
+  # dplyr::select(sample_id, chr = seqnames, start, ref, read_depth, allele_frequencies) %>%
+  identity()
+
+
+```
+
+# table s13
+
+```{r rb_exome44}
+recurrent_vc_vars <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv") %>% 
+  dplyr::mutate(start = as.factor(start)) %>% 
+  identity()
+```
+
+```{r }
+rc_vars <- colnames(recurrent_vc_vars)
+
+rc_vars <- c("ref", "sample_id", "allele_frequencies", rc_vars)
+
+test0 <- dplyr::left_join(recurrent_vc_vars, brc, by = c("chr", "start", "ref")) %>% 
+  dplyr::select(one_of(rc_vars)) %>%
+  split_af() %>% 
+  dplyr::mutate(snp_id = paste0(gene, ": ", sample)) %>% 
+  dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>% 
+  dplyr::mutate(sample_type = stringr::str_extract(sample_id, "[A-Z]+")) %>% 
+  dplyr::group_by(sample_id, start) %>%
+  dplyr::distinct() %>% 
+  identity()
+
+test1 <- 
+  test0 %>% 
+  dplyr::filter(alt != ref) %>%
+  identity()
+
+vaf_survey_plot <- ggplot(test1, aes(x = snp_id, y = af)) +
+  geom_point(aes(shape = sample_type, color = sample_number)) +
+  scale_y_log10() +
+  labs(title = 'Variant Allele Frequeny (VAF) at Recurrent Sites', ylab = "VAF", xlab = NULL) +
+  theme_cowplot() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NULL
+
+ggsave(fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/fig_s9.pdf"), vaf_survey_plot)
+
+write_csv(test0, fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/table_s99.csv"))
+
+```
+
+# Similarly, subclonal variant alleles of the recurrently altered NAF1, ALMS1, and LTN1 were not evident in tumor-derived cell lines.
+
+```{r }
+test2 <- 
+  test0 %>% 
+  dplyr::filter(gene %in% c("BCOR")) %>% 
+  dplyr::arrange(sample) %>% 
+  identity()
+```

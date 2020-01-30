@@ -1,0 +1,4 @@
+Target total_coverage counts on_target duplication_rate
+seq1:1000-2000 20973 610 TRUE 0
+seq2:100-1000 39449 1158 TRUE 0
+seq2:1001-2000 21252 636 TRUE 0

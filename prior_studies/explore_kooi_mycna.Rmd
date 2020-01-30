@@ -1,0 +1,39 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+kooi_supp <- read_csv("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/SCNA_summary_by_chrom_arm_kooi.csv") %>% 
+  dplyr::filter(arm == "2p") %>% 
+  dplyr::filter(SCNAcall == "gain") %>% 
+  arrange(desc(`copy number`))
+```
+
+```{r}
+test <- read_csv("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/scna_segments.csv") %>% 
+  dplyr::filter(chrom == 2) %>% 
+  dplyr::filter(seg.mean > 1) %>% 
+  dplyr::filter(loc.start < 16e6 & loc.end > 16e6) %>% 
+  arrange(desc(seg.mean)) %>% 
+  write_csv("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/MYCNA_segments.csv")
+```
+
+```{r}
+kooi_cov <- read_csv("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/seq_qc_by_sample_kooi.csv") %>% 
+  summarize(mean_cov = mean(MEAN_TARGET_COVERAGE), sd_cov = sd(MEAN_TARGET_COVERAGE)) %>%
+  identity()
+
+```

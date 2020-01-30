@@ -1,0 +1,188 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+library(plyranges)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+### load prior author variants
+
+```{r rb_exome33}
+prior_author_variants <- read_csv("../doc/RB_exome_manuscript/SNV/prior_author_variants.csv")
+
+message("these are the prior studies")
+split(prior_author_variants, prior_author_variants$author) %>% 
+  purrr::map(~unique(.x$sample))
+
+```
+
+```{r rb_exome32}
+
+stachelek_variants <- read_csv("../doc/RB_exome_manuscript/stachelek_supplemental/table_s13.csv") %>% 
+  dplyr::mutate(author = "stachelek et al.") %>%
+  identity()
+
+final_cols <- c("sample", "chr", "start", "end", "ref", "alt", "gene", "HGVSc", 
+"VAF", "recurrence", "counts", "Consequence", "HGVSp", "naive_alt_depth", 
+"naive_read_depth", "author")
+
+all_author_variants <- dplyr::bind_rows(prior_author_variants, stachelek_variants) %>% 
+  dplyr::filter(gene != "RB1") %>% 
+  dplyr::select(one_of(final_cols)) %>%
+  mutate(sample_type = ifelse(grepl("CL", sample), "Cell Line", "Tumor")) %>%
+  dplyr::mutate(series = case_when(author == "stachelek et al." & grepl("[0-9]{3}-CL", sample) ~ "CHLA-RB",
+                                    author == "stachelek et al." & grepl("[0-9]{2}-.*", sample) ~ "CHLA-VC-RB",
+                                   author != "stachelek et al." ~ author)) %>% 
+  identity()
+
+```
+
+# 29. compare final variants to COSMIC Cancer Gene Census (CGC) and Lawrence et al.
+
+```{r rb_exome72}
+cosmic_gene_census <- readr::read_csv("~/Homo_sapiens/COSMIC/Census_allWed Nov 28 04_37_48 2018.csv")
+
+lawrence_genes <- read_csv("../doc/RB_exome_manuscript/prior_studies/lawrence_supp_info/lawrence_saturation_genes.csv") %>% 
+  tidyr::gather("tumor_type", "qval", -gene) %>%
+  dplyr::filter(qval < 0.05) %>% 
+  dplyr::filter(tumor_type == "pancan") %>% 
+  identity()
+
+all_author_variants <- 
+  all_author_variants %>% 
+  dplyr::mutate(cosmic_status = ifelse(gene %in% cosmic_gene_census$`Gene Symbol`, "present", NA)) %>% 
+  dplyr::mutate(lawrence_status = ifelse(gene %in% lawrence_genes$gene, "present", NA))
+
+
+```
+
+
+```{r }
+
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+write_csv(all_author_variants, all_author_variants_path)
+```
+
+## write all author scna
+
+```{r }
+gene_marker_granges <- genes(txdb)[c('54880', '5925', '4613')]
+names(gene_marker_granges) <- c("BCOR", "RB1", "MYCN")
+
+seqlevelsStyle(gene_marker_granges) <- "Ensembl"
+```
+
+```{r }
+
+gene_map <- names(gene_marker_granges)
+names(gene_map) <- gene_marker_granges$gene_id
+
+prior_scna <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/SCNA/prior_author_scna.csv")
+
+# output vc seg             
+vc_seg_path <- "~/rb_pipeline/results/SCNA/vc_SCNA_segments.txt"
+vc_seg <- read.table(vc_seg_path, sep = "\t") %>% 
+  dplyr::filter(!str_detect(ID, "none"), !str_detect(sample_id, "N"))
+
+# output reynolds seg
+reynolds_seg_path <- "~/rb_pipeline/results/SCNA/reynolds_SCNA_segments.txt"
+reynolds_seg <- read.table(reynolds_seg_path, sep = "\t")
+
+stachelek_seg <- dplyr::bind_rows(vc_seg, reynolds_seg) %>% 
+  dplyr::rename(seqnames = chrom) %>% 
+  dplyr::mutate(copy_number = 2*2^(seg.mean)) %>%
+  plyranges::as_granges() %>% 
+  identity()
+
+seqlevelsStyle(stachelek_seg) <- "ensembl"
+
+stachelek_seg <- 
+  stachelek_seg %>% 
+  find_overlaps(gene_marker_granges) %>%
+  as_tibble() %>% 
+  dplyr::rename(chromosome = seqnames) %>% 
+  dplyr::filter((chromosome %in% c("X", "13") & copy_number < 1.6) | (chromosome == "2" & copy_number > 2.5)) %>%
+  dplyr::mutate(symbol = gene_map[gene_id], author = "stachelek et al.") %>%
+  dplyr::select(id = sample_id, symbol, chromosome, seg_mean = seg.mean, copy_number, author) %>% 
+  identity()
+
+all_scna <- 
+  dplyr::bind_rows(prior_scna, stachelek_seg)
+
+write_csv(all_scna, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s02.csv")
+
+```
+
+# tally overlap of stachelek variants and scna/loh
+
+## load segmentation 
+
+```{r }
+baf_granges <- readRDS("~/rb_pipeline/results/LOH/baf_granges.rds")
+
+seg_granges <- readRDS("~/rb_pipeline/results/SCNA/seg_granges.rds")
+karyo_segs <- readRDS("~/rb_pipeline/results/SCNA/karyo_segs.rds")
+
+```
+
+```{r }
+stachelek_var_granges <- 
+  all_author_variants %>% 
+  dplyr::filter(author == "stachelek et al.") %>% 
+  dplyr::rename(seqnames = chr) %>% 
+  dplyr::mutate(sample = str_replace(sample, "-", ".")) %>% 
+  split(.$sample) %>% 
+  purrr::map(as_granges) %>% 
+  # plyranges::as_granges() %>% 
+  identity()
+```
+
+## find baf overlap
+
+```{r }
+baf_comparison <- baf_granges$vc[names(stachelek_var_granges)]
+
+ai_snv_overlap <- 
+purrr::map2(stachelek_var_granges, baf_comparison, find_overlaps) %>% 
+  purrr::compact() %>% 
+  purrr::map(as_tibble) %>% 
+  dplyr::bind_rows() %>%
+  dplyr::select(gene, HGVSp, sample, mBAF, chromosome = seqnames, start, end, ref, alt) %>%
+  identity()
+
+write_csv(ai_snv_overlap, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s18.csv")
+
+```
+
+## find scna overlap
+
+```{r }
+scna_comparison <- seg_granges$vc[names(stachelek_var_granges)]
+
+scna_snv_overlap <- 
+purrr::map2(stachelek_var_granges, scna_comparison, find_overlaps) %>% 
+  purrr::compact() %>% 
+  purrr::map(as_tibble) %>% 
+  dplyr::bind_rows() %>%
+  dplyr::select(gene, HGVSp, sample_id, seg.mean, chromosome = seqnames, start, end, ref, alt) %>% 
+  identity()
+
+write_csv(scna_snv_overlap, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s19.csv")
+
+
+```
+

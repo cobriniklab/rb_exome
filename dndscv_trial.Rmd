@@ -1,0 +1,78 @@
+---
+title: "Untitled"
+author: "Kevin Stachelek"
+date: "11/19/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# load required libraries -------------------------------------------------
+
+```{r}
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(grid)
+library(cowplot)
+library(readxl)
+library(tidyverse)
+library(lubridate)
+library(dndscv)
+```
+
+```{r}
+
+
+run_dndscv <- function(data){
+  dndsout <- dndscv(data)
+}
+# data("dataset_simbreast", package = "dndscv")
+# 
+# dndsout = dndscv(mutations)
+
+
+
+```
+
+
+# load unfiltered mutect2 variants
+
+```{r, eval=T}
+
+colnames(mutations)
+# "sampleID" "chr"      "pos"      "ref"      "mut"   
+
+# read in raw mutect2 variants
+
+m2_raw_tumors_path <- "~/rb_pipeline/results/SNV/tidy_m2_tumors.rds"
+m2_tumor_mutations <- readRDS(m2_raw_tumors_path) %>% 
+  dplyr::select(sampleID = "sample", chr = "seqnames", pos = "start", ref = "REF", mut = "ALT") %>% 
+  as.data.frame()
+
+m2_raw_cell_lines_path <- "~/rb_pipeline/results/SNV/tidy_m2_cell_lines.rds"
+m2_cell_lines_mutations <- readRDS(m2_raw_cell_lines_path) %>% 
+  dplyr::select(sampleID = "sample", chr = "seqnames", pos = "start", ref = "REF", mut = "ALT")
+
+      
+m2_raw_normals_path <- "~/rb_pipeline/results/SNV/tidy_m2_normals.rds"
+m2_normals_mutations <- readRDS(m2_raw_normals_path) %>% 
+  dplyr::select(sampleID = "sample", chr = "seqnames", pos = "start", ref = "REF", mut = "ALT")
+
+      
+m2_raw_reynolds_path <- "~/rb_pipeline/results/SNV/tidy_m2_reynolds.rds"
+m2_reynolds_mutations <- readRDS(m2_raw_reynolds_path) %>% 
+  dplyr::select(sampleID = "sample", chr = "seqnames", pos = "start", ref = "REF", mut = "ALT")
+
+```
+
+```{r}
+m2_dnddsout <- run_dndscv(m2_tumor_mutations)
+```
+
+

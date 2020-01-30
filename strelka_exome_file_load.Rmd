@@ -1,0 +1,329 @@
+---
+title: "stchlk_exome_annotation.Rmd"
+author: "Kevin Stachelek"
+date: "1/30/2018"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+load rb datasets. Keep in mind that only samples c("24-T", "28-C", "28-T", "29-T", "29-C", "31-T", "31-C", "41-C", "46-T", "46-C", "48-T", "48-C") have ready rb variants detected 
+
+# 1. load packages
+
+```{r rb_exome01}
+library(tidyverse)
+library(stchlkExome)
+suppressMessages(library(EnsDb.Hsapiens.v86))
+edb <- EnsDb.Hsapiens.v86
+library(S4Vectors)
+library(ensemblVEP)
+library(plyranges)
+library(glue)
+library(data.table)
+library(Rsamtools)
+manuscript_dir <- "~/rb_pipeline/doc/RB_exome_manuscript/"
+
+```
+
+## 4. read in strelka snv vcf files 
+
+```{r rb_exome02}
+strelka_snv_filtered_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_snv_vep_filtered.vcf$",  full.names = TRUE, recursive = TRUE)
+
+strelka_snv_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_snv_vep.vcf$",  full.names = TRUE, recursive = TRUE)
+
+strelka_snv_filenames <- strelka_snv_filtered_filenames
+
+strelka_snv_list <- load_vcfs(strelka_snv_filenames, "strelka_snv_filtered")
+
+```
+
+## 5. read strelka indel vcf files 
+
+```{r rb_exome03}
+
+strelka_indel_filtered_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_indel_vep_filtered.vcf$",  full.names = TRUE, recursive = TRUE)
+
+strelka_indel_unfiltered_filenames <- list.files(path="~/rb_pipeline/output/strelka/", pattern=".*strelka_indel_vep.vcf$",  full.names = TRUE, recursive = TRUE)
+
+strelka_indel_filenames <- strelka_indel_filtered_filenames
+
+strelka_indel_list <- load_vcfs(strelka_indel_filenames, "strelka_indel_filtered")
+
+```
+
+# load strelka vcf lists
+
+```{r rb_exome04}
+strelka_snv_list <- readRDS("../results/SNV/strelka_snv_unfiltered_list.rds")
+
+strelka_indel_list <- readRDS("../results/SNV/strelka_indel_unfiltered_list.rds")
+```
+
+# 6. collate strelka snvs
+
+```{r rb_exome05}
+
+tidy_strelka_snvs <- stchlkExome::collate_vcfs(strelka_snv_list, strelka_tidy_snvs, "tn") %>% 
+  dplyr::filter(FILTER == "PASS")
+
+strelka_snv_path <- "~/rb_pipeline/results/SNV/strelka_snvs_unfiltered.rds"
+
+# test <- stchlkExome::collate_vcfs(strelka_snv_list[c("33-T", "33-CL")], strelka_tidy_snvs, "tn")
+
+saveRDS(tidy_strelka_snvs, strelka_snv_path)
+
+```
+
+# 7. collate strelka indels
+
+```{r rb_exome06}
+
+tidy_strelka_indels <- stchlkExome::collate_vcfs(strelka_indel_list, strelka_tidy_indels, "tn") %>% 
+  dplyr::filter(FILTER == "PASS")
+
+strelka_indel_path <- "~/rb_pipeline/results/SNV/strelka_indels_unfiltered.rds"
+
+# test <- stchlkExome::collate_vcfs(strelka_indel_list[c("33-T", "33-CL")], strelka_tidy_indels, "tn")
+
+saveRDS(tidy_strelka_indels, strelka_indel_path)
+
+```
+
+# 8. load variant caller filtered strelka snvs 
+
+```{r rb_exome07}
+
+strelka_snv_path <- "~/rb_pipeline/results/SNV/strelka_snvs.rds"
+tidy_strelka_snvs <- readRDS(strelka_snv_path)
+print_tl("strelka_snvs", tidy_strelka_snvs)
+
+strelka_snvs_per_sample <- table(tidy_strelka_snvs$sample)
+
+plot(strelka_snvs_per_sample)
+
+```
+
+# 9. load variant caller filtered strelka indels 
+
+```{r rb_exome08}
+
+strelka_indel_path <- "~/rb_pipeline/results/SNV/strelka_indels.rds"
+tidy_strelka_indels <- readRDS(strelka_indel_path)
+
+strelka_indels_per_sample <- table(tidy_strelka_indels$sample)
+
+plot(strelka_indels_per_sample)
+
+
+```
+
+# 12. load strelka variants and combine
+
+```{r rb_exome09}
+# read in strelka snvs 
+strelka_snv_path <- "~/rb_pipeline/results/SNV/strelka_snvs.rds"
+strelka_snvs <- readRDS(strelka_snv_path)
+
+# read in strelka indels 
+strelka_indel_path <- "~/rb_pipeline/results/SNV/strelka_indels.rds"
+strelka_indels <- readRDS(strelka_indel_path)
+
+match_cols <- intersect(colnames(strelka_indels), colnames(strelka_snvs))
+
+strelka_variants <- bind_rows(list(strelka_snvs[match_cols], strelka_indels[match_cols])) %>% 
+  dplyr::select(sample, SYMBOL, everything()) %>% 
+  identity()
+
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants.rds"
+saveRDS(strelka_variants, strelka_variants_path)
+
+```
+
+# 15. load unfiltered strelka variants
+
+```{r rb_exome10}
+
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants.rds"
+
+strelka_variants <- readRDS(strelka_variants_path)
+
+strelka_t_variants <- dplyr::filter(strelka_variants, grepl("T", sample)) %>% 
+  print_tl("Strelka T variants")
+
+strelka_cl_variants <- dplyr::filter(strelka_variants, grepl("CL", sample)) %>% 
+  print_tl("Strelka CL variants")
+
+```
+
+# 13. filter strelka variants
+
+```{r rb_exome11}
+
+filt_strelka_variants <- filter_variant_set(strelka_variants, "strelka")
+
+# filt_strelka_variants <- filter_variant_set(strelka_variants, "strelka")
+
+filt_strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants_filt.rds"
+saveRDS(filt_strelka_variants, filt_strelka_variants_path)
+
+```
+
+
+# 14. count number of variant caller and custom filtered variants
+
+```{r rb_exome12}
+strelka_cl_variants <- dplyr::filter(strelka_variants, grepl("CL", sample))
+print_tl("cl_indels", strelka_cl_variants)
+strelka_t_variants <- dplyr::filter(strelka_variants, grepl("T", sample))
+print_tl("t_indels", strelka_t_variants)
+
+strelka_cl_variants_filt <- dplyr::filter(filt_strelka_variants, grepl("CL", sample))
+print_tl("cl_indels", strelka_cl_variants_filt)
+strelka_t_variants_filt <- dplyr::filter(filt_strelka_variants, grepl("T", sample))
+print_tl("t_indels", strelka_t_variants_filt)
+
+```
+
+
+# 15. load filtered strelka variants
+
+```{r rb_exome13}
+
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants_filt.rds"
+
+strelka_variants_filt <- readRDS(strelka_variants_path)
+
+```
+
+# 17. Reported Variants
+
+```{r rb_exome14}
+reported_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_strelka_vc_somatic_variants.csv"
+
+reported_strelka_somatic_vars <- filter(strelka_variants_filt, FILTER == "PASS") %>% 
+  filter(path_meta_score >= 2) %>%
+  select(sample, SYMBOL, HGVSc, HGVSp, everything()) %>% 
+  dplyr::group_by(sample, paramRangeID) %>% # each variant has >1 protein product, need to filter each down to one 
+  dplyr::filter(row_number() == 1) %>% 
+  dplyr::filter(HGVSp != "") %>% 
+  identity()
+
+write_csv(reported_strelka_somatic_vars, reported_vars_path)
+
+```
+
+# 13. load reported variants
+
+```{r rb_exome16}
+reported_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_strelka_vc_somatic_variants.csv"
+reported_strelka_somatic_vars <- read_csv(reported_vars_path)
+
+reported_cl_vars <- dplyr::filter(reported_strelka_somatic_vars, grepl("CL", sample))
+print_tl(reported_cl_vars, "final m2 cl variants")
+
+reported_t_vars <- dplyr::filter(reported_strelka_somatic_vars, grepl("T", sample))
+print_tl(reported_t_vars, "final m2 t variants")
+
+short_stat <- function(stat_function, vector){
+  signif(stat_function(vector), digits = 2)
+}
+
+t_vars_by_sample <- as.numeric(table(reported_t_vars$sample))
+glue::glue("{short_stat(mean, sample_df)} +/- {short_stat(sd, sample_df)} range {min(sample_df)}-{max(sample_df)}", sample_df = t_vars_by_sample)
+
+cl_vars_by_sample <- as.numeric(table(reported_cl_vars$sample))
+glue::glue("{short_stat(mean, sample_df)} +/- {short_stat(sd, sample_df)} range {min(sample_df)}-{max(sample_df)}", sample_df = cl_vars_by_sample)
+```
+
+
+# 16. compile list of SCNAs from all five prior studies (Kooi, Zhang, McEvoy, Grobner, St. Jude Pecan)
+
+```{r rb_exome19}
+zhang_scnas <- tibble(
+  gene = "BCOR", 
+  chr = "chrX",
+  sample = "SJRB066", 
+  author = "zhang"
+)
+
+kooi_scnas <- tibble(
+  gene = "BCOR", 
+  chr = "chrX",
+  sample = c("T22", "T67"), 
+  author = "kooi"
+)
+
+all_scnas <- dplyr::bind_rows(zhang_scnas, kooi_scnas)
+
+
+```
+
+# compile list of prior SNVs and SCNAs
+
+```{r rb_exome20}
+
+zhang_genes <- c("RHBG", "TMEM195", "CCNC", "LHX8", "HNMT", "STOML2", "SDK1", "TXK", "CD300LG", "BCOR")
+
+table_s1 <- five_author_variants %>% 
+  dplyr::bind_rows(all_scnas, .id = "mutation") %>% 
+  mutate(mutation = ifelse(mutation == 1, "SNV", "SCNA"))
+
+write_csv(table_s1, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supp_info/table_s1.csv")
+```
+
+
+# 18. find variants that are shared between strelka tumor and matched cell line
+
+```{r rb_exome26}
+
+strelka_t_cl_vars <- compare_t_cl(reported_strelka_somatic_vars, "strelka") 
+
+write_csv(strelka_t_cl_vars, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/strelka_t_cl_vars.csv")
+
+# strelka_t_cl_vars <- strelka_t_cl_vars[strelka_t_cl_vars$FILTER.TUMOR == "PASS" | strelka_t_cl_vars$FILTER.CELL_LINE == "PASS",]
+
+```
+
+# 2. collate RB1 mutect2 variants for all samples
+
+```{r m2_file_load13}
+
+tidy_and_select_rb <- function(variants){
+  # browser()
+  variants <- variants %>% 
+    dplyr::filter(SYMBOL == "RB1" & !is.na(genename)) %>% 
+    dplyr::select(one_of(c("sample", "seqnames", "start", "end", "AF.TUMOR")))
+}
+
+test0 <- 
+  strelka_variants %>% 
+  tidy_and_select_rb() %>% 
+  # dplyr::bind_rows() %>% 
+  identity()
+
+# m2_somatic_vars_rb <- tidy_and_select_rb(m2_somatic_vars)
+# 
+# rb1_var_from_bam_igv <- read_csv("~/rb_pipeline/results/rb1_var_not_mutect2.csv")
+# 
+# 
+# tidy_rb_variants <- rbindlist(list(m2_somatic_vars_rb, rb1_var_from_bam_igv), fill = T) %>% 
+#   arrange(sample)
+# 
+# rb1_status_old <- read_csv("~/rb_pipeline/doc/rb1_status_old.csv") %>% 
+#   dplyr::select(-c(somatic.snv.VAF, somatic.snv.AAchange, germline.snv.VAF, germline.snv.AAchange))
+# 
+# rb1_status <- full_join(tidy_rb_variants, rb1_status_old, by = c("sample" = "Sample.ID")) %>% 
+#   dplyr::rename(chrom = seqnames)
+# 
+# rb1_status <- rb1_status[gtools::mixedorder(rb1_status$sample),]
+# 
+# write_csv(rb1_status, "~/rb_pipeline/doc/RB_exome_manuscript/rb1_status2.csv")
+
+
+```

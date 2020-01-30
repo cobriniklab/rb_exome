@@ -1,0 +1,310 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+manuscript_dir <- fs::path(proj_dir, "doc", "RB_exome_manuscript")
+
+library(reshape2)
+library(tidyverse)
+library(data.table)
+library(karyoploteR)
+library(purrr)
+library(scales)
+library(biobroom)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene #shorthand (for convenience)
+library(org.Hs.eg.db)
+library(plyranges)
+library(RaggedExperiment)
+library(CNVRanger)
+library(plyranges)
+```
+
+```{r }
+# find copywriter output 
+copywriter_segment_data <- fs::path(proj_dir, "output", "copywriter", c("reynolds", "vc")) %>% 
+  dir_ls(recurse = T) %>% 
+  path_filter("*segment.Rdata")
+```
+
+```{r }
+load_seg_objs <- function(segmentation_files){
+  if (length(segmentation_files) == 1){
+    segmentation_objects <- get(load(segmentation_files))
+    segmentation_objects <- split(segmentation_objects$output, segmentation_objects$output$ID)
+    return(segmentation_objects)
+  } else{   # if loading rdata files containing single sample per file ---------------
+    segment_names <- strsplit(segmentation_files,'/')
+    segment_names <- sapply(segment_names, '[[', 8)
+    
+    segmentation_objects <- lapply(segmentation_files, function(x) get(load(x)))
+    names(segmentation_objects) <- c(segment_names)  
+  }  
+}
+```
+
+```{r }
+segment_objects <- purrr::map(copywriter_segment_data, load_seg_objs)
+```
+
+```{r }
+# process reynolds
+
+reynolds_granges <- segment_objects$`/dataVolume/storage/rb_pipeline/output/copywriter/reynolds/50kb/CNAprofiles/segment.Rdata`
+
+reynolds_granges <- reynolds_granges[grepl("*none", names(reynolds_granges))]
+
+names(reynolds_granges) <- paste0(stringr::str_extract(names(reynolds_granges), "[0-9]{3}"), "-CL")
+
+# start, end, width, seqnames and strand
+
+convert_copywriter_to_granges <- function(copywriter_df){
+seg_granges <- 
+  copywriter_df %>% 
+  dplyr::select(start = loc.start, end = loc.end, num.mark, seg.mean, ID, seqnames = chrom) %>% 
+  dplyr::mutate(start = as.numeric(start) - 0.5, end = as.numeric(end) - 0.5) %>%
+  mutate(start = start, width = end - start, strand = "*", seqnames = paste0("chr", seqnames)) %>%
+  dplyr::mutate(seqnames = case_when(
+    seqnames == "chr23" ~ "chrX",
+    seqnames == "chr24" ~ "chrY",
+    TRUE ~ as.character(seqnames)
+  )) %>%
+  GRanges() %>%
+  identity()
+
+
+}
+
+reynolds_granges <- purrr::map(reynolds_granges, convert_copywriter_to_granges)
+
+
+```
+
+```{r }
+# process vc
+
+vc_granges <- flatten(segment_objects[c(2,3)])
+
+vc_granges <- vc_granges[grepl(".*T.*N|.*CL.*N", names(vc_granges))]
+
+vc_granges <- vc_granges[sort(names(vc_granges))]
+
+names(vc_granges) <- stringr::str_extract(names(vc_granges), "[0-9]{2}.CL|[0-9]{2}.T")
+
+# start, end, width, seqnames and strand
+
+convert_copywriter_to_granges <- function(copywriter_df){
+seg_granges <- 
+  copywriter_df %>% 
+  dplyr::select(start = loc.start, end = loc.end, num.mark, seg.mean, ID, seqnames = chrom) %>% 
+  dplyr::mutate(start = as.numeric(start) - 0.5, end = as.numeric(end) - 0.5) %>%
+  mutate(start = start, width = end - start, strand = "*", seqnames = paste0("chr", seqnames)) %>%
+  dplyr::mutate(seqnames = case_when(
+    seqnames == "chr23" ~ "chrX",
+    seqnames == "chr24" ~ "chrY",
+    TRUE ~ as.character(seqnames)
+  )) %>%
+  GRanges() %>%
+  identity()
+
+
+}
+
+vc_granges <- purrr::map(vc_granges, convert_copywriter_to_granges)
+
+```
+
+```{r }
+seg_granges <- c(reynolds_granges, vc_granges)
+
+seg_granges <- seg_granges[unique(names(seg_granges))]
+
+saveRDS(seg_granges, fs::path(proj_dir, "results", "SCNA", "seg_granges.rds"))
+
+
+```
+
+
+# load seg granges
+
+```{r, eval = F}
+seg_granges <- readRDS(fs::path(proj_dir, "results", "SCNA", "seg_granges.rds"))
+
+seg_granges <- unlist(seg_granges)
+
+```
+
+```{r}
+seg_granges <- purrr::map(seg_granges, ~plyranges::mutate(.x, state = 2*2^(seg.mean)))
+
+seg_granges <- purrr::map(seg_granges, ~plyranges::select(.x, state, everything()))
+```
+
+
+```{r, eval = F}
+vc_granges <- seg_granges[grepl("vc", names(seg_granges))] %>% 
+  purrr::map(~plyranges::filter(.x, !grepl(".*N.*N", ID)))
+
+reynolds_granges <- seg_granges[grepl("reynolds", names(seg_granges))] %>% 
+  purrr::map(~plyranges::filter(.x, grepl("none", ID)))
+```
+
+```{r}
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+gns <- genes(txdb, columns = c("GENEID"))
+
+# myGeneSymbols <- select(org.Hs.eg.db,
+#                         keys = c("INO80","NASP","INO80D","SMARCA1"),
+#                         columns = c("SYMBOL","ENTREZID"),
+#                         keytype = "SYMBOL")
+
+
+gns <- plyranges::mutate(gns, symbol = AnnotationDbi::select(org.Hs.eg.db, keys = as.character(gns$GENEID), columns = "SYMBOL", keytype = "ENTREZID"))
+  
+strand(gns) <- "*"
+
+```
+
+# find gene-specific overlap
+
+```{r}
+# qreduceAssay(ragexp, query, simplifyReduce = weightedmean)
+find_SCNA_gene_overlaps <- function(my_grl, known_genes){
+  
+  gene_based_SCNA <- purrr::map(my_grl, function(x) {
+    gene_scnas <- biobroom::tidy.GRanges(find_overlaps(known_genes, x)) %>% 
+      dplyr::select(SYMBOL = symbol.SYMBOL, -symbol.ENTREZID, everything()) %>% 
+      dplyr::arrange(seqname)  %>% 
+      dplyr::select(-num.mark, -seg.mean, -GENEID, -symbol.ENTREZID) %>%
+      dplyr::group_by(SYMBOL) %>% 
+      dplyr::filter(row_number() == 1) %>% 
+      dplyr::mutate(ID = stringr::str_extract(ID, "[0-9]+.CL|[0-9]+.T")) %>% 
+      tidyr::spread(ID, state) %>% 
+      identity()
+  })
+  
+}
+
+gene_scna_list <- find_SCNA_gene_overlaps(seg_granges, gns)
+
+join_cols = head(colnames(gene_scna_list[[1]]), -1)
+# join_cols = colnames(gene_scna_list[[1]])
+
+gene_scnas <- gene_scna_list %>%
+  # dplyr::bind_rows() %>% 
+  purrr::reduce(inner_join, by = join_cols) %>%
+  # tidyr::spread(sample_id, state) %>% 
+  # group_by(SYMBOL) %>% 
+  # summarize_at(vars(starts_with("14.CL")), sum) %>% 
+    identity()
+
+write_csv(gene_scnas, fs::path("../../results/SCNA/SCNA_by_gene.csv"))
+
+
+write_csv(gene_scnas, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/", "table_s5a.csv"))
+```
+
+# inspect gene scnas
+
+```{r }
+# find difference between subclonal and clonal difference in sample 20-CL and 20-T
+twenty_16_diff <- dplyr::select(gene_scnas, one_of(c(join_cols, "20.CL", "20.T"))) %>% 
+  dplyr::filter(seqname == "chr16") %>% 
+  identity()
+
+# find RB loss in sample 24
+twenty4_rb_loss <- dplyr::select(gene_scnas, one_of(c(join_cols, "24.CL", "24.T"))) %>% 
+  dplyr::filter(seqname == "chr13") %>% 
+  dplyr::filter(SYMBOL == "RB1") %>% 
+  identity()
+
+```
+
+
+```{r}
+test0 <- dplyr::filter(gene_scnas, seqname == "chr16") %>%
+  select(one_of(c(join_cols, "20.CL", "20.T"))) %>%
+  arrange(start) %>%
+  # dplyr::filter(min(`20.CL`)) %>%
+  identity()
+
+# send cog cell lines to atcc
+
+# remove matched normal text 
+
+# reformat table s13 and s14; separate tumor and cell lines
+
+```
+
+# try cnvranger
+
+
+```{r}
+# qreduceAssay(ragexp, query, simplifyReduce = weightedmean)
+
+ragexp <- RaggedExperiment(vc_granges)
+
+cassay <- compactAssay(ragexp)
+
+weightedmean <- function(scores, ranges, qranges)
+{
+    ## weighted average score per query range
+    ## the weight corresponds to the size of the overlap of each 
+    ## overlapping subject range with the corresponding query range  
+    isects <- pintersect(ranges, qranges)
+    sum(scores * width(isects)) / sum(width(isects))
+}
+
+qredassay <- qreduceAssay(ragexp, gns, simplifyReduce = weightedmean, withDimnames = TRUE)
+
+
+newgr <- GRanges(rownames(qredassay))
+mcols(newgr) <- qredassay
+
+newgr <- sort(newgr)
+
+gene_scnas <- biobroom::tidy.GRanges(find_overlaps(newgr, gns)) %>% 
+  dplyr::select(SYMBOL = symbol.SYMBOL, -symbol.ENTREZID, everything()) %>% 
+  dplyr::arrange(seqname)
+
+write_csv(gene_scnas, fs::path("../../results/SCNA/SCNA_by_gene.csv"))
+
+# write_csv(gene_scnas, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/", "table_s5.csv"))
+
+```
+
+
+```{r}
+cnvrs <- populationRanges(vc_grl, density=0.05, est.recur=TRUE)
+# cnvrs <- cnvrs[cnvrs$pvalue < 0.05]
+```
+
+```{r}
+library(regioneR)
+
+keep_chr <- unique(as.vector(seqnames(cnvrs)))
+
+genome <- getGenome("hg19")
+
+gns <- filterChromosomes(gns, keep.chr = keep_chr)
+
+
+res <- suppressWarnings(overlapPermTest(A=cnvrs, B=gns, ntimes=1000, 
+    genome=genome, mask=NA, per.chromosome=TRUE, count.once=TRUE))
+res
+
+summary(res[[1]]$permuted)
+```

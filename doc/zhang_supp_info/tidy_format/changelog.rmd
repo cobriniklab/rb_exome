@@ -1,4 +1,0 @@
-Thu Aug  3 11:32:08 PDT 2017
-gene_summary.csv  = Sup. Table 10.xls
-rearrange_ins_del_summary.csv = Sup. Table 12.xls
-gain_loss_census.csv = Sup. Table 14b.xls

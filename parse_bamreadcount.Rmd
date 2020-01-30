@@ -1,0 +1,673 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+# load libraries
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(cowplot)
+library(gghighlight)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+# load functions
+
+```{r }
+split_ad <- function(df){
+  # 
+  df <- 
+  df %>% 
+  tidyr::separate_rows(alt_depths, sep = "; ") %>%
+  tidyr::separate(alt_depths, into = c("alt", "alt_depth"), sep = ": ") %>% 
+  dplyr::mutate(alt_depth = as.numeric(as.character(alt_depth)))
+}
+
+combine_ad <- function(df){
+  df <- 
+    df %>% 
+    dplyr::mutate(alt_depths = paste0(alt, ": ", alt_depth)) %>%
+    dplyr::group_by(sample_id, seqnames, start) %>%
+    dplyr::mutate(alt_depths = paste0(alt_depths, collapse = "; ")) %>%
+    identity()
+}
+```
+
+# load bamreadcount files
+
+```{r }
+bamreadcountfiles <- fs::path(proj_dir, "output", "bamreadcount") %>% 
+  dir_ls() %>% 
+  path_filter("*all_readcount.txt") %>% 
+  purrr::set_names(fs::path_file(.))
+
+bamreadcounts <- purrr::map(bamreadcountfiles, read.table, fill = T, row.names = NULL, header = F)
+
+
+calc_AD <- function(readcount_df){
+  readcount_df <- 
+    readcount_df %>% 
+    tidyr::gather(one_of(paste0("V", seq(6,20))), key = "allele", value = "allele_info") %>% 
+    tidyr::separate(allele_info, into = c("alt", "alt_info"), sep = ":") %>%
+    dplyr::rename(seqnames = V1, start = V2, ref = V3, read_depth = V4, ref_info = V5) %>%
+    dplyr::mutate(alt_info = stringr::str_remove(alt_info, "^:")) %>%
+    tidyr::separate(alt_info, into = c("alt_depth", "alt_info"), sep = ":.*") %>%
+    dplyr::mutate_at(c("alt_depth", "read_depth"), .funs=funs(as.numeric(as.character(.)))) %>%
+    dplyr::select(-allele, -alt_info, -ref_info) %>%
+    dplyr::mutate(af = alt_depth / read_depth) %>%
+    dplyr::arrange(seqnames, start, desc(af)) %>%
+    dplyr::mutate(start = as.factor(start)) %>%
+    dplyr::filter(af > 0) %>%
+    dplyr::select(-af) %>% 
+    identity()
+}
+
+brc <- purrr::map(bamreadcounts, calc_AD) %>% 
+  dplyr::bind_rows(.id = "sample_id") %>%
+  dplyr::mutate(sample_id = stringr::str_remove(sample_id, "_.*")) %>%
+  dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>%
+  dplyr::distinct() %>%
+  combine_ad() %>%
+  # dplyr::filter(ref == alt) %>%
+  dplyr::select(sample_id, chr = seqnames, start, ref, read_depth, alt_depths, read_depth) %>%
+  identity()
+
+
+```
+
+# table s7
+
+```{r }
+# missing_genes <- c("ADAMTS9", "c11orf80", "HRG", "MEOX2", "SASH1", "SPTBN1", "TGFBR2")
+# 
+# test0 <- dplyr::filter(all_author_variants, gene %in% missing_genes)
+```
+
+```{r rb_exome44}
+vc_vars <- read_csv("../results/vc_ensemble_mutect2_strelka_vars.csv") %>% 
+  dplyr::mutate(start = as.factor(start)) %>% 
+  dplyr::rename(alt_vc = ALT) %>%
+  identity()
+
+vc_cols <- colnames(vc_vars)
+
+vc_cols <- c("ref", "sample_id", "allele_frequencies", "alt_depths", "read_depth", "alt_vc", vc_cols)
+
+
+problematic_bcor <- dplyr::right_join(brc, vc_vars, by = c("chr" = "seqnames", "start")) %>% 
+  dplyr::select(one_of(vc_cols)) %>%
+  split_ad() %>% 
+  dplyr::mutate(gene = SYMBOL) %>% 
+  dplyr::mutate(snp_id = paste(gene, sample, alt_vc, sep = "_")) %>%
+  dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>% 
+  dplyr::mutate(sample_type = stringr::str_extract(sample_id, "[A-Z]+")) %>% 
+  dplyr::group_by(sample_id, start) %>%
+  dplyr::filter(gene == "BCOR") %>% 
+  dplyr::filter(nchar(alt) > 1) %>% 
+  dplyr::distinct(snp_id, .keep_all = T) %>% 
+  identity()
+
+vc_vars <- dplyr::right_join(brc, vc_vars, by = c("chr" = "seqnames", "start", "ref" = "REF")) %>% 
+  dplyr::select(one_of(vc_cols)) %>%
+  split_ad() %>% 
+  dplyr::mutate(gene = SYMBOL) %>% 
+  dplyr::mutate(snp_id = paste(gene, sample, alt_vc, sep = "_")) %>%
+  dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>% 
+  dplyr::mutate(sample_type = stringr::str_extract(sample_id, "[A-Z]+")) %>% 
+  dplyr::group_by(sample_id, start) %>%
+  dplyr::distinct() %>% 
+  dplyr::filter(alt == alt_vc) %>%
+  identity()
+
+vc_vars <- dplyr::bind_rows(problematic_bcor, vc_vars) %>%
+  dplyr::mutate(af = alt_depth/read_depth) %>% 
+  identity()
+
+```
+
+# table s13
+
+```{r }
+recurrent_vc_vars <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv") %>% 
+  dplyr::mutate(start = as.factor(start)) %>% 
+  dplyr::rename(alt_vc = alt) %>% 
+  identity()
+
+recurrent_vc_cols <- colnames(recurrent_vc_vars)
+
+recurrent_vc_cols <- c("ref", "sample_id", "allele_frequencies", "alt_vc", recurrent_vc_cols)
+
+recurrent_vc_vars <- dplyr::left_join(recurrent_vc_vars, brc, by = c("chr", "start", "ref")) %>% 
+  dplyr::select(one_of(recurrent_vc_cols)) %>%
+  # split_ad() %>% 
+  dplyr::mutate(snp_id = paste(gene, sample, alt_vc, sep = "_")) %>%
+  dplyr::mutate(sample_number = stringr::str_extract(sample_id, "[0-9]+")) %>% 
+  dplyr::mutate(sample_type = stringr::str_extract(sample_id, "[A-Z]+")) %>% 
+  dplyr::group_by(sample_id, start) %>%
+  dplyr::distinct() %>% 
+  identity()
+  
+```
+
+# format plot input
+
+```{r }
+
+vaf_plot_input <- 
+  vc_vars %>% 
+  # dplyr::filter(alt != ref) %>%
+  identity()
+
+vaf_plot_reference <- 
+  vaf_plot_input %>% 
+  dplyr::group_by(snp_id) %>% 
+  # dplyr::top_n(2, af) %>% 
+  dplyr::mutate(max_af = max(af)) %>% 
+  dplyr::select(max_af, snp_id) %>% 
+  dplyr::arrange(desc(max_af)) %>%
+  identity()
+
+snp_id_order <-
+  vaf_plot_reference %>%
+  dplyr::pull(snp_id) %>%
+  unique() %>%
+  identity()
+
+vaf_plot_input <- dplyr::left_join(vaf_plot_input, vaf_plot_reference, by = "snp_id") %>% 
+  dplyr::arrange(max_af) %>% 
+  dplyr::mutate(snp_id = factor(snp_id, levels = snp_id_order)) %>% 
+  dplyr::distinct(sample_id, snp_id, alt, .keep_all = T) %>% 
+  dplyr::mutate(HGVSc = dplyr::coalesce(HGVSc.m2, HGVSc.strelka)) %>% 
+  dplyr::mutate(HGVSp = dplyr::coalesce(HGVSp.m2, HGVSp.strelka)) %>% 
+  dplyr::select(chr, start, end, ref, alt, sample, SYMBOL, HGVSc, HGVSp, everything()) %>% 
+  # dplyr::group_by(gene, sample_id, alt) %>% 
+  # dplyr::mutate(snp_id = paste0(dplyr::n(), ". ", snp_id)) %>% 
+  identity()
+
+```
+
+# format filtered plot input
+
+```{r }
+
+nonpartner_snps <- 
+  vaf_plot_input %>% 
+  group_by(snp_id) %>% 
+  top_n(2, af) %>% 
+  dplyr::filter(af > 0.05) %>% 
+  dplyr::mutate(num_samples = length(unique(sample_number))) %>% 
+  dplyr::filter(num_samples > 1) %>% 
+  dplyr::pull(snp_id) %>% 
+  identity()
+
+dropped_snps <- 
+  vaf_plot_input %>% 
+  dplyr::group_by(snp_id) %>% 
+  dplyr::filter(af > 0.1) %>% 
+  dplyr::summarize(num_snps = dplyr::n()) %>% 
+  dplyr::filter(num_snps > 6) %>% 
+  dplyr::pull(snp_id)
+
+niggling_snps <- c("TAS2R46_28-T_G", "RUFY2_46-T_T", "MUC4_41-CL_T", "PSRC1_20-T_G", "LTN1_49-T_T", "TAS2R46_29-CL_T", "SLC9A8_28-T_T", "KIR2DL1_41-CL_G", "SLC7A3_24-T_T", "CRISPLD2_24-T_A", "ZNF41_24-T_C", "PABPN1L_24-T_A")
+
+dropped_snps <- c(as.character(dropped_snps), 
+                  niggling_snps,
+                  as.character(nonpartner_snps)
+                  )
+
+filtered_vaf_plot_input <-
+  vaf_plot_input %>% 
+  dplyr::filter(!snp_id %in% dropped_snps) %>% 
+  dplyr::filter(max_af >= 0.07058823) %>% 
+  dplyr::filter(af >= 0.05 | str_replace(sample_id, "-.*", "") == str_replace(sample, "-.*", "")) %>%
+  identity()
+
+```
+
+# define vaf plot input
+
+# make plots
+
+```{r }
+
+make_vaf_plot <- function(vaf_df, circle_ids = NULL){
+  # 
+  
+  if(!is.null(circle_ids)){
+    vaf_df <- dplyr::left_join(vaf_df, circle_ids, by = c("sample_id", "snp_id")) %>% 
+      dplyr::arrange(snp_id)
+    
+  }
+  
+  filtered_vaf_survey_plot <- ggplot(vaf_df, aes(x = snp_id, y = af)) +
+  geom_point(aes(shape = sample_type, color = sample_number)) +
+  gghighlight(circle_id == "circled", use_direct_label = FALSE, unhighlighted_colour = NULL) +
+  geom_point(pch=21, fill=NA, size=3, colour="black", stroke=0.5) +
+  scale_y_log10() +
+  # labs(title = 'Variant Allele Frequeny (VAF) at Called Sites', ylab = "VAF", xlab = NULL) +
+  theme_cowplot(9) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  ylim(0, 1.0) + 
+  coord_flip() +
+  paletteer::scale_color_paletteer_d("ggsci::default_igv") +
+  labs(x = "Protein:Consequence", y = "Allele Frequency", shape = "Sample Type", color = "Sample Number")
+  # scale_x_discrete(labels = paste0(seq(length(snp_id), snp_id))) +
+  NULL  
+  
+  return(filtered_vaf_survey_plot)
+
+
+}
+
+make_heatmap_input <- function(vaf_input) {
+  fmax <- 
+    vaf_input %>% 
+    dplyr::group_by(snp_id) %>% 
+    dplyr::slice(which.max(af)) %>%
+    dplyr::mutate(max_id = sample_id) %>% 
+    dplyr::mutate(partner_id = case_when(str_detect(max_id, "-T") ~ str_replace_all(max_id, "-T", "-CL"),
+                                         str_detect(max_id, "-CL") ~ str_replace_all(max_id, "-CL", "-T"))) %>%
+    dplyr::mutate(normal_id = case_when(str_detect(max_id, "-T") ~ str_replace_all(max_id, "-T", "-N"),
+                                         str_detect(max_id, "-CL") ~ str_replace_all(max_id, "-CL", "-N"))) %>%
+    dplyr::select(snp_id, max_id, partner_id, normal_id) %>%
+    identity()
+  
+  
+  test0 <- 
+    dplyr::left_join(vaf_input, fmax, by = "snp_id") %>% 
+    identity()
+  
+  testpartner <- dplyr::filter(test0, sample_id == partner_id) %>% 
+    dplyr::select(-max_id, -normal_id)
+  
+  testmax <- dplyr::filter(test0, sample_id == max_id) %>% 
+    dplyr::select(-partner_id, -normal_id)
+  
+  testnormal <- dplyr::filter(test0, sample_id == normal_id) %>% 
+    dplyr::select(-partner_id, -max_id)
+  
+  # 
+  
+  heatmap_input <- dplyr::bind_rows(testpartner, testmax, testnormal) %>% 
+    # tidyr::gather(max_id, partner_id, key = "partner", value = "member") %>%
+    dplyr::mutate(id = coalesce(max_id, partner_id, normal_id)) %>% 
+    dplyr::mutate(id = case_when(grepl("T", id) ~ "tumor",
+                                 grepl("CL", id) ~ "cell_line",
+                                 grepl("N", id) ~ "normal")) %>% 
+    identity()
+  
+  return(heatmap_input)
+    
+}
+
+make_heatmap_plot <- function(vaf_input, circle_ids = NULL) {
+  
+  
+  heatmap_input <- make_heatmap_input(vaf_input)
+  
+  graph_label <- heatmap_input %>% 
+    dplyr::mutate(graph_label = paste(gene, str_replace(HGVSp, ".*:", ""), sep = ":")) %>% 
+    dplyr::pull(graph_label)
+  
+  names(graph_label) <- heatmap_input$snp_id
+  
+  p1 <- ggplot(heatmap_input, aes(id, snp_id)) + 
+    geom_tile(aes(fill = af)) + 
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    theme_cowplot(9) +
+    theme(legend.position = "none",
+          plot.margin = unit(c(0.5, 0, 0.5, 0), "cm")) +
+    scale_x_discrete(labels=c("cell_line" = "CL", "normal" = "N",
+                              "tumor" = "T")) + 
+    scale_y_discrete(labels = graph_label) + 
+    labs(x = 'Type', y = "Protein:Consequence") +
+    NULL
+  
+  p2 <- make_vaf_plot(vaf_input, circle_ids = circle_ids) +
+      theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.title.y = element_blank(),
+          plot.margin = unit(c(0.5, 0, 0.5, 0), "cm"))
+    
+  p3 <- cowplot::plot_grid(p1, p2, align = "h", axis = "b", rel_widths = c(1, 2))
+}
+
+# new
+create_circle_ids <- function(vaf_input, dplyr, ungroup, mutate, recurrence, filter, sample, snp_id, sample_id, id, select, circle_id) {
+  test0 <- make_heatmap_input(vaf_input) %>% 
+    dplyr::ungroup() %>%
+    dplyr::mutate(recurrence = str_split(recurrence, pattern = ";")) %>%
+    dplyr::filter(str_count(recurrence, str_replace(sample, "-.*", "")) < 2) %>%
+    group_by(snp_id) %>%
+    dplyr::filter(str_replace(sample_id, "-.*", "") == str_replace(sample, "-.*", "") & sample_id != sample) %>% 
+    dplyr::filter(id != "normal") %>% 
+    # dplyr::filter(partner_id != sample) %>%
+    dplyr::mutate(circle_id = "circled") %>%
+    dplyr::select(sample_id, snp_id, circle_id) %>%
+    # dplyr::filter(str_detect(snp_id, "FAM57A")) %>% 
+    identity()
+}
+
+
+
+
+```
+
+## Patterns of selection in tumor and cell line
+
+```{r }
+find_selected_variants <- function(vaf_input) {
+  selected_variants <- make_heatmap_input(vaf_input) %>% 
+    arrange(snp_id) %>% 
+    group_by(snp_id) %>% 
+    dplyr::select(snp_id, gene, id, af, sample_number) %>%
+    tidyr::pivot_wider(names_from = id, values_from = af, values_fn = list(af = mean)) %>%
+    dplyr::mutate(selection = case_when(is.na(tumor) ~ 'na_tumor',
+                                        is.na(cell_line) ~ 'na_cell_line',
+                                        cell_line > tumor ~ 'positive',
+                                        tumor > cell_line ~ 'negative')) %>%
+    dplyr::mutate(cohort = case_when(selection %in% c("positive", "na_tumor") ~ 'positive',
+                                     selection %in% c("negative", "na_cell_line") ~ 'negative')) %>%
+    identity()
+}
+
+selected_variants <- find_selected_variants(vaf_plot_input) %>% 
+    split(.$cohort) %>%
+    purrr::map(~unique(dplyr::pull(.x, snp_id)))
+
+print(selected_variants)
+
+```
+
+
+```{r }
+
+circle_ids <- create_circle_ids(vaf_plot_input)
+
+# filtered_vaf_survey_plot <- make_vaf_plot(filtered_vaf_plot_input)
+
+selected_vaf_input <- purrr::map(selected_variants, ~dplyr::filter(filtered_vaf_plot_input, snp_id %in% .x))
+
+filtered_vaf_survey_plots <- purrr::map(selected_vaf_input, make_heatmap_plot, circle_ids = circle_ids)
+
+all_filtered_vaf_plot <- plot_grid(filtered_vaf_survey_plots$positive + theme(legend.position="none"), 
+                                   filtered_vaf_survey_plots$negative + theme(legend.position="none"), 
+                                   labels = "AUTO", 
+                                   align = "vh",
+                                   axis = "l",
+                                   ncol = 1, 
+                                   rel_heights = c(2, 1))
+
+ggsave(fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/fig_02.pdf"), all_filtered_vaf_plot, height = 8, width = 6)
+```
+
+```{r }
+
+recurrent_vc_vars <- "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv" %>% 
+  read_csv() %>% 
+  dplyr::mutate(snp_id = paste(gene, sample, alt, sep = "_")) %>%
+  identity()
+```
+
+# private somatic variants 
+
+```{r }
+private_variants <- filtered_vaf_plot_input %>% 
+  dplyr::ungroup() %>% 
+  dplyr::filter(max_af == af) %>% 
+  dplyr::filter(!gene %in% c("BCOR", "PAN2", "NAF1", "SAMD9")) %>% 
+  dplyr::select(sample_number, gene, start, end, ref, alt) %>% 
+  dplyr::distinct() %>% 
+  # dplyr::filter(n == 1) %>%
+  identity()
+
+n_private <- private_variants %>% 
+  nrow() %>%
+  # dim(private_variants)[1] %>% 
+  identity()
+
+filtered_selected_variants <- find_selected_variants(filtered_vaf_plot_input) %>%
+  dplyr::ungroup(snp_id) %>% 
+  split(.$selection) %>%
+  purrr::map(~dplyr::mutate(.x, snp_id = str_replace(snp_id, "-.*", ""))) %>% 
+  purrr::map(~unique(dplyr::pull(.x, snp_id))) %>% 
+  identity()
+
+glue("Exome sequencing of tumor-derived cell lines revealed selection for initially subclonal SCNAs and {length(filtered_selected_variants$positive)} gene variants including PAN2 and SAMD9, yet selection against {length(filtered_selected_variants$negative)} variants including BCOR and NAF1.")
+  
+  glue("In addition to biallelic RB1 inactivation, MYCN amplification, and established recurrent DNA copy number alterations, the analyses revealed recurrence of potentially pathogenic subclonal somatic variants of BCOR, PAN2, NAF1, and SAMD9  HYDIN?} as well as {n_private} private mutations. Exome sequencing of cell lines derived from each tumor revealed selection for initially subclonal SCNAs and {length(filtered_selected_variants$positive)} gene variants including PAN2 and SAMD9, yet selection against {length(filtered_selected_variants$negative)} variants including BCOR and NAF1 ")
+  
+```
+
+
+```{r }
+selected_vaf_input <- purrr::map(selected_variants, ~dplyr::filter(vaf_plot_input, snp_id %in% .x))
+
+all_vaf_survey_plots <- purrr::map(selected_vaf_input, make_heatmap_plot, circle_ids = circle_ids)
+
+all_vaf_plot <- plot_grid(all_vaf_survey_plots$positive, 
+                                   all_vaf_survey_plots$negative, 
+                                   labels = "AUTO", 
+                                   align = "vh",
+                                   axis = "l",
+                                   ncol = 1, 
+                                   rel_heights = c(2, 1))
+
+ggsave(fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/fig_s11.pdf"), all_vaf_plot, height = 14, width = 6)
+
+```
+
+
+```{r }
+
+minimal_cols <- c("sample", "chr", "start", "end", "ref", "alt", gene = "SYMBOL", "HGVSc", "VAF" = "af", "recurrence", "counts", "Consequence", "HGVSp", "naive_alt_depth" = "alt_depth", "naive_read_depth" = "read_depth")
+
+filtered_vaf_plot_input %>%
+  dplyr::select(-sample) %>% 
+  dplyr::rename(sample = sample_id) %>% 
+  dplyr::filter(!str_detect(sample, "-N")) %>% 
+  dplyr::select(minimal_cols) %>%
+  dplyr::ungroup() %>% 
+  dplyr::mutate_at(.vars = vars(one_of(c("start", "end"))), as.numeric) %>%
+  dplyr::distinct() %>% 
+  write_csv(fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/table_s13.csv"))
+
+vaf_plot_input %>% 
+  dplyr::select(-sample) %>% 
+  dplyr::rename(sample = sample_id) %>% 
+  dplyr::filter(!str_detect(sample, "-N")) %>% 
+  dplyr::select(minimal_cols) %>%
+  dplyr::ungroup() %>% 
+  dplyr::mutate_at(.vars = vars(one_of(c("start", "end"))), as.numeric) %>%
+  dplyr::distinct() %>% 
+  write_csv(fs::path("../doc/RB_exome_manuscript/stachelek_supplemental/table_s14.csv"))
+
+```
+
+# snp ids to confirm via qpcr and sanger sequencing 
+
+```{r }
+
+edge_snp_ids <- c("PYROXD2_46-T", "SAMD9_43-CL", "ATN1_49-T", "HK1_24-CL", "FAT4_49-CL", "ATM_43-CL", "MYH1_20-T")
+
+recurrent_snp_ids <- unique(recurrent_vc_vars$snp_id)
+
+excluded_snp_ids <- c("MAGEC1_31-CL", "MAGEC1_29-T", "MUC4_14-T", "TUBB8_24-T")
+
+dbl_check_snpids <- c(edge_snp_ids, recurrent_snp_ids)
+
+dbl_check_snpids <- dbl_check_snpids[!dbl_check_snpids %in% excluded_snp_ids]
+
+dbl_check_snpids <- dbl_check_snpids[dbl_check_snpids %in% filtered_vaf_plot_input$snp_id]
+
+double_check_sites <- dplyr::filter(vc_vars, snp_id %in% dbl_check_snpids) %>% 
+  dplyr::filter(alt != ref) %>%
+  dplyr::group_by(snp_id) %>% 
+  dplyr::slice(which.max(af)) %>% 
+  dplyr::select(snp_id, sample_number) %>% 
+  identity()
+
+double_check_sites <- semi_join(vc_vars, double_check_sites, by = c("snp_id", "sample_number")) %>% 
+  dplyr::filter(alt != ref) %>%
+  identity()
+
+double_check_sites_file <- "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s15.csv"
+
+write_csv(double_check_sites, double_check_sites_file)
+```
+
+# load primer and sites beds 
+
+```{r eval = F}
+sites_file <- "~/rb_pipeline/results/primer_design/all_variants/sites.bed"
+
+primer_file <-  "~/rb_pipeline/results/primer_design/all_variants/primers.bed"
+
+sites_bed <- read_tsv(sites_file)
+
+primer_bed <- purrr::map(list(primer_file), read_tsv, col_names = c("chr", "start", "end", "snp_id", "pair", "sequence")) %>% 
+  dplyr::bind_rows() %>% 
+  dplyr::arrange(snp_id, pair) %>%
+  dplyr::group_by(snp_id) %>%
+  dplyr::mutate(insert_size = max(start) - min(end)) %>%
+  dplyr::mutate(product_size = insert_size + sum(nchar(sequence))) %>% 
+  dplyr::filter(!is.na(product_size)) %>% 
+  identity()
+
+write_csv(primer_bed, "~/rb_pipeline/results/primer_design/all_variants/product_sizes.csv")
+```
+
+# create [primer designer](https://primerdesign.willseylab.com/PrimerDesigner/PrimerDesigner.php) input
+
+```{r }
+regions_file <- 
+  filtered_vaf_plot_input %>% 
+  dplyr::ungroup() %>% 
+  dplyr::select(chromosome = chr, start, stop = end, snp_id) %>% 
+  dplyr::mutate(start = as.numeric(start)) %>% 
+  dplyr::distinct() %>% 
+  write_tsv(fs::path(proj_dir, "results", "primer_design", "primer_designer_input.txt")) %>%
+  identity()
+
+```
+
+# format primer designer output
+
+```{r }
+primer_file <- "~/rb_pipeline/results/primer_design/all_variants/BestPrimers.txt"
+
+designed_primers <- read_tsv(primer_file) %>% 
+  dplyr::rename(chromosome = chromsome) %>% 
+  identity()
+
+overall_bed <- dplyr::left_join(regions_file, designed_primers, by = c("chromosome", "start", "stop")) %>% 
+  dplyr::select(chromosome, start, stop, snp_id, Oligo1L_Start, Oligo1L_End, Oligo1R_Start, Oligo1R_End, Oligo1_Left, Oligo1_Right) %>% 
+  tidyr::unite(forward, Oligo1L_Start, Oligo1L_End, Oligo1_Left) %>% 
+  tidyr::unite(reverse, Oligo1R_Start, Oligo1R_End, Oligo1_Right) %>% 
+  tidyr::pivot_longer(one_of("forward", "reverse"), names_to = "oligo_partner", values_to = "position") %>%
+  dplyr::mutate(oligo_partner = ifelse(oligo_partner == "forward", "F", "R")) %>% 
+  tidyr::separate(position, into = c("oligo_start", "oligo_end", "sequence")) %>% 
+  dplyr::mutate(oligo_start = dplyr::na_if(oligo_start, "NA")) %>% 
+  # dplyr::mutate(snp_id = gsub(": ", "_", snp_id)) %>% 
+  identity()
+
+```
+
+# write primer and sites bed 
+
+```{r eval = F}
+primer_bed <- 
+  overall_bed %>% 
+  tidyr::drop_na() %>%
+  dplyr::mutate_at(vars(one_of(c("oligo_start", "oligo_end"))), as.numeric) %>% 
+  dplyr::bind_rows(missing_primers) %>%
+  dplyr::select(chromosome, oligo_start, oligo_end, snp_id, oligo_partner, sequence) %>% 
+  write_delim("~/rb_pipeline/results/primer_design/all_variants/primers.bed", col_names = F) %>% 
+  identity()
+
+sites_bed <- overall_bed %>% 
+  dplyr::select(chromosome, start, stop, snp_id) %>% 
+  tidyr::drop_na() %>%
+  write_delim("~/rb_pipeline/results/primer_design/all_variants/sites.bed", col_names = F)
+
+```
+
+## difference between variant callers and hand curation 
+
+```{r }
+vc_tally <-
+  "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s06.csv" %>% 
+  read_csv() %>% 
+  dplyr::mutate(sample_type = ifelse(str_detect(sample, "T"), "T", "CL")) %>% 
+  dplyr::select(sample, gene = SYMBOL, chromosome, start, end, ref = REF, alt = ALT, sample_type) %>%
+  split(.$sample_type) %>% 
+  purrr::map(distinct) %>%
+  purrr::map(nrow) %>% 
+  identity()
+
+naive_tally <- 
+  vaf_plot_input %>% 
+  dplyr::select(sample, gene = SYMBOL, chromosome = chr, start, end, ref, alt, sample_type) %>%
+  split(.$sample_type) %>% 
+  purrr::map(distinct) %>%
+  purrr::map(nrow) %>% 
+  identity()
+
+filtered_tally <- 
+  filtered_vaf_plot_input %>% 
+  ungroup() %>% 
+  dplyr::select(sample, gene = SYMBOL, chromosome = chr, start, end, ref, alt, sample_type) %>%
+  split(.$sample_type) %>% 
+  purrr::map(distinct) %>%
+  purrr::map(nrow) %>%
+  identity()
+
+glue("This analysis reduced the total number of tumor variants from {vc_tally$T} to {naive_tally$T} to {filtered_tally$T} and reduced the number of cell line variants from {vc_tally$CL} to {naive_tally$CL} to {filtered_tally$CL}")
+```
+
+#  mutations in ANY???  that were recurrent to variants found in other retinoblastomas yet not detected in their originating tumors
+
+```{r }
+
+cl_only_snp_ids <- 
+  filtered_vaf_plot_input %>% 
+  dplyr::filter(af > 0.1) %>% 
+  dplyr::group_by(snp_id) %>% 
+  dplyr::mutate(reference_sample_number = str_remove(sample, "-.*")) %>%
+  dplyr::filter(sample_number == reference_sample_number) %>%
+  dplyr::mutate(sample_types = list(sample_type)) %>% 
+  dplyr::filter(sample_types == "CL") %>% 
+  dplyr::pull(snp_id) %>%  
+  identity()
+
+# fig_s12 <- filtered_vaf_plot_input %>% 
+#   dplyr::filter(snp_id %in% cl_only_snp_ids) %>% 
+#   make_vaf_plot() %>% 
+#   identity()
+# 
+# ggsave("../doc/RB_exome_manuscript/stachelek_supplemental/fig_s12.pdf", fig_s12)
+  
+
+```
+
+### allele spec bed 
+
+```{r }
+allele_spec_genes <- c("ATM", "ATN1", "BCOR", "FAT4", "MYH1", "SAMD9")
+  
+  allele_spec_snps <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s01.csv") %>% 
+    dplyr::filter(gene %in% allele_spec_genes) %>% 
+    dplyr::filter(author == "stachelek et al.") %>% 
+    dplyr::select(chr, start, end, gene, ref, alt) %>% 
+    dplyr::distinct() %>% 
+    # write_delim("results/primer_design/allele_spec_primers.bed", delim = "\t", col_names = FALSE) %>% 
+    identity()
+```

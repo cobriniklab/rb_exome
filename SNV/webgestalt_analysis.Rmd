@@ -1,0 +1,265 @@
+---
+title: "WebGestalt"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r }
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(WebGestaltR)
+library(enrichR)
+dbs <- c("GO_Molecular_Function_2018", "GO_Cellular_Component_2018", "GO_Biological_Process_2018", "ClinVar_2019")
+library(stchlkExome)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+
+```
+
+```{r }
+save_gene_set_results <- function(variants, gene_list_path) {
+  out_gene_sets <- run_webgestaltr(all_cl_t_variants, gene_list_path)
+  out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+  write_csv(out_gene_sets, out_csv_path)
+  
+  return(out_gene_sets)
+}
+
+# prep webgestalt output
+
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+all_author_variants <- read_csv(all_author_variants_path)
+
+webgestalt_output_dir <- "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/webgestalt/"
+```
+
+```{r }
+
+fs::dir_delete(webgestalt_output_dir)
+
+fs::dir_create(webgestalt_output_dir)
+
+```
+
+# all author variants tumor and cell line with reynolds
+
+```{r }
+
+# all_author_cl_t_webgestalt_w_reynolds ------------------------------
+
+# a) all genes with potentially pathogenic mutations in all sequenced RB Ts and CLs 
+
+gene_list_path <- fs::path(webgestalt_output_dir, "all_cl_t_w_reynolds.txt")
+dir_create(path_dir(gene_list_path))
+
+out_gene_sets <- run_webgestaltr(all_author_variants, gene_list_path)
+out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+write_csv(out_gene_sets, out_csv_path)
+
+# all_author_cl_t_webgestalt_w_reynolds------------------------------
+
+```
+
+
+## filtered
+
+### webgestalt plot all tumor and/or cell line variants
+
+```{r }
+# a) all genes with potentially pathogenic mutations in all sequenced RB Ts and CLs 
+
+gene_list_path <- fs::path(webgestalt_output_dir, "filtered", "all_cl_t.txt")
+dir_create(path_dir(gene_list_path))
+
+all_cl_t_variants <- all_author_variants %>% 
+  dplyr::filter(!series == "CHLA-RB") %>% 
+  identity()
+
+filtered_t_cl_results <- save_gene_set_results(all_cl_t_variants, gene_list_path)
+
+write_csv(filtered_t_cl_results, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s21.csv")
+
+```
+
+### enrichr plot all tumor and/or cell line variants
+
+```{r }
+# a) all genes with potentially pathogenic mutations in all sequenced RB Ts and CLs 
+
+
+all_cl_t_genes <- all_author_variants %>% 
+  dplyr::filter(!series == "CHLA-RB") %>% 
+  dplyr::pull(gene) %>% 
+  identity()
+
+enriched <- enrichr(all_cl_t_genes, dbs)
+
+purrr::imap(enriched, ~write_csv(.x, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/enrichr/", "tumor_cell_line", paste0(.y, ".csv"))))
+
+```
+
+
+## all tumor variants
+
+
+### webgestalt
+
+```{r }
+# all_author_t_webgestalt ------------------------------
+
+# a) all genes with potentially pathogenic mutations in all sequenced RB Ts and CLs 
+
+gene_list_path <- fs::path(webgestalt_output_dir, "filtered", "all_t.txt")
+dir_create(path_dir(gene_list_path))
+
+filtered_all_t_variants <- all_author_variants %>% 
+  dplyr::filter(!series == "CHLA-RB") %>%
+  dplyr::filter(sample_type == "Tumor") %>% 
+  identity()
+
+filtered_t_results <- save_gene_set_results(filtered_all_t_variants, gene_list_path)
+
+write_csv(filtered_t_results, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s20.csv")
+```
+
+### enrichr
+
+```{r }
+all_t_genes <- all_author_variants %>% 
+  dplyr::filter(!series == "CHLA-RB") %>% 
+  dplyr::filter(sample_type == "Tumor") %>%
+  dplyr::pull(gene) %>% 
+  identity()
+
+enriched <- enrichr(all_t_genes, dbs)
+
+purrr::imap(enriched, ~write_csv(.x, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/enrichr/", "tumor", paste0(.y, ".csv"))))
+
+```
+
+```{r }
+prep_bump <- function(df){
+  df <- df %>% 
+    dplyr::group_by(geneSet) %>% 
+    dplyr::select(gene = userId, geneSet, description) %>% 
+    dplyr::mutate(gene2 = stringr::str_split(gene, ";")) %>% 
+    tidyr::unnest(gene2) %>%
+    dplyr::mutate(gene = gene2) %>% 
+    identity()
+}
+
+prep_for_bump <- function(dfs){
+  # browser()
+  
+  dfs <- purrr::map(dfs, prep_bump)
+
+  dfs <- dplyr::full_join(dfs[[1]], dfs[[2]], by = c("gene2"), suffix = paste0(".", names(dfs))) %>% 
+    dplyr::ungroup(geneSet.filtered_results) %>% 
+    dplyr::select(-gene2, -geneSet.filtered_results) %>%
+    dplyr::select(geneSet = geneSet.filtered_results, description = description.filtered_results, gene.filtered_results, gene.filtered_results) %>%
+    dplyr::filter(gene.filtered_results == gene.filtered_results | is.na(gene.filtered_results)) %>%
+    dplyr::distinct() %>%
+    tidyr::replace_na(list(gene.filtered_results = '')) %>% 
+    identity()
+
+}
+
+# t_cl_results <- list(filtered_results = filtered_t_cl_results, filtered_results = filtered_t_cl_results)
+# 
+# t_results <- list(filtered_results = filtered_t_results, filtered_results = filtered_t_results)
+# 
+# t_bump <- prep_for_bump(t_results) %>% 
+#   dplyr::arrange(geneSet) %>%
+#   write_csv(fs::path(webgestalt_output_dir, "all_t_group_membership.csv")) %>%
+#   identity()
+# 
+# t_cl_bump <- prep_for_bump(t_cl_results) %>% 
+#   dplyr::arrange(geneSet) %>% 
+#   write_csv(fs::path(webgestalt_output_dir, "all_cl_t_group_membership.csv"))
+```
+
+## webgestalt stachelek plot all tumor variants
+
+```{r eval = FALSE}
+# stachelek_cl_t_vc_webgestalt ------------------------------
+
+# a) all genes with potentially pathogenic mutations in all vision center RB Ts and CLs 
+vc_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s07.csv")
+
+stachelek_vc_variants_t_cl <- read_csv(vc_somatic_variants_path) %>% 
+  # dplyr::filter(!grepl("CL", sample)) %>% 
+  identity()
+
+gene_list_path <- fs::path(webgestalt_output_dir, "stachelek_cl_t.txt")
+dir_create(path_dir(gene_list_path))
+
+out_gene_sets <- run_webgestaltr(stachelek_vc_variants_t_cl, gene_list_path)
+out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+write_csv(out_gene_sets, out_csv_path)
+```
+
+```{r eval = FALSE}
+# stachelek_t_webgestalt ------------------------------
+## webgestalt plot stachelek tumor variants
+
+# b) all genes with PPMs in all RB Ts (but no CLs)
+
+vc_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s07.csv")
+stachelek_vc_variants_t <- read_csv(vc_somatic_variants_path) %>% 
+  dplyr::filter(!grepl("CL", sample))
+
+gene_list_path <- fs::path(webgestalt_output_dir, "stachelek_t.txt")
+
+
+out_gene_sets <- run_webgestaltr(stachelek_vc_variants_t, gene_list_path)
+out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+write_csv(out_gene_sets, out_csv_path)
+```
+
+
+### webgestalt recurrent tumor and/or cell line variants
+
+
+```{r eval = FALSEALSE}
+
+# recurrent_cl_t_webgestalt ------------------------------
+## webgestalt plot recurrent vc tumor and/or cell line variants
+
+# c) all genes with PPMs that were recurrent among all RB Ts and CLs
+
+rvctcl_vars_path <- "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv"
+recurrent_t_cl_variants <- read_csv(rvctcl_vars_path) %>%
+  dplyr::mutate(SYMBOL = gene) %>% 
+  identity()
+
+gene_list_path <- fs::path(webgestalt_output_dir, "recurrent_cl_t.txt")
+
+out_gene_sets <- run_webgestaltr(recurrent_t_cl_variants, gene_list_path)
+out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+write_csv(out_gene_sets, out_csv_path)
+```
+
+### webgestalt recurrent tumor variants
+
+```{r  eval = FALSE}
+# recurrent_t_webgestalt ------------------------------
+## webgestalt plot recurrent vc tumor variants
+
+# d) all genes with PPMs that were recurrent among all RB Ts (but no CLs)
+
+rvctcl_vars_path <- "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv"
+recurrent_t_variants <- read_csv(rvctcl_vars_path) %>%
+  dplyr::mutate(SYMBOL = gene) %>% 
+  dplyr::filter(sample_type != "Cell Line") %>% 
+  identity()
+
+gene_list_path <- fs::path(webgestalt_output_dir, "recurrent_t.txt")
+
+out_gene_sets <- run_webgestaltr(recurrent_t_variants, gene_list_path)
+out_csv_path <- paste0(tools::file_path_sans_ext(gene_list_path), "_output.csv")
+write_csv(out_gene_sets, out_csv_path)
+
+```

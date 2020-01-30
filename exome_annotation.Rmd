@@ -1,0 +1,829 @@
+---
+title: "stchlk_exome_annotation.Rmd"
+author: "Kevin Stachelek"
+date: "1/30/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+remedy::remedy_opts$set(name = "rb_exome")
+```
+
+
+```{r rb_exome_00, eval = F}
+source("related_functions.R")
+
+```
+
+load rb datasets. Keep in mind that only samples c("24-T", "28-C", "28-T", "29-T", "29-C", "31-T", "31-C", "41-C", "46-T", "46-C", "48-T", "48-C") have ready rb variants detected 
+
+# 1. load packages
+
+```{r rb_exome01, warning=FALSE, include = F}
+library(tidyverse)
+library(stchlkExome)
+suppressMessages(library(EnsDb.Hsapiens.v86))
+edb <- EnsDb.Hsapiens.v86
+library(org.Hs.eg.db)
+library(ggrepel)
+library(S4Vectors)
+library(ensemblVEP)
+library(plyranges)
+library(glue)
+library(data.table)
+library(rprojroot)
+library(fs)
+library(GenVisR)
+library(gridExtra)
+library(WebGestaltR)
+library(ggridges)
+library(janitor)
+
+proj_dir = proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+
+sample_types <- c("tumors", "cell_lines", "normals", "reynolds")
+
+```
+
+```{r load_m2_files, child="m2_exome_file_load.Rmd", eval = F}
+
+```
+
+```{r load_strelka_files, child="strelka_exome_file_load.Rmd", eval = F}
+
+```
+
+# 2. load unrefined m2 variants
+
+```{r rb_exome16, eval = F}
+
+m2_collated_vars_ps_unrefined <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, "_unfiltered.rds"))
+
+refine_vars <- function(vars){
+  vars <- vars %>% 
+    dplyr::filter(FILTER %in% c(".", "PASS")) %>% 
+    dplyr::filter(!is.na(HGVSc)) %>% 
+    identity()
+}
+
+m2_collated_vars_unrefined <- 
+  m2_collated_vars_ps_unrefined %>% 
+  purrr::map(readRDS) %>% 
+  # purrr::map(refine_vars) %>%
+  purrr::set_names(sample_types) %>% 
+  identity()
+
+```
+
+# 3. load unrefined strelka variants
+
+```{r rb_exome16b, eval = F}
+strelka_variants_path <- "~/rb_pipeline/results/SNV/strelka_variants.rds"
+
+unfiltered_strelka_vc_vars <- readRDS(strelka_variants_path)
+
+```
+
+```{r compile_prior_variants, child="prior_variants.Rmd", eval = F}
+
+```
+
+# 7. load list of variants from prior studies
+
+```{r rb_exome25}
+prior_author_variants <- read_csv("../doc/RB_exome_manuscript/SNV/prior_author_variants.csv")
+```
+
+# 8. load reported m2 variants
+
+```{r rb_exome16c}
+reported_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_vc_somatic_variants.csv"
+reported_m2_vc_somatic_vars <- read_csv(reported_vars_path)
+
+reported_m2_reynolds_somatic_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv"
+reported_m2_reynolds_somatic_vars <- read_csv(reported_m2_reynolds_somatic_vars_path)
+
+```
+
+# 9. load reported strelka variants
+
+```{r rb_exome26}
+reported_strelka_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_strelka_vc_somatic_variants.csv"
+
+reported_strelka_somatic_vars <- read_csv(reported_strelka_vars_path)
+```
+
+# 10. ensemble variants
+
+### vision center
+
+```{r rb_exome27}
+mincol <- c("sample", "seqnames", "start", "end", "REF", "ALT", "paramRangeID", "SYMBOL")
+
+mincol <- c("sample", "seqnames", "start", "end", "REF", "ALT", "SYMBOL", "paramRangeID", "Consequence")
+
+reported_variants <- list(mutect2 = reported_m2_vc_somatic_vars, strelka = reported_strelka_somatic_vars)
+ 
+additional_col <- c("AF.TUMOR", "AD.TUMOR.1", "AD.TUMOR.2", "AF.NORMAL", "AD.NORMAL.1",  "AD.NORMAL.2", "HGVSc", "HGVSp")
+
+expandedcol <- c(mincol, additional_col)
+
+reported_variants <- purrr::map(reported_variants, ~dplyr::select(.x, one_of(expandedcol)))
+
+# variants found by both callers
+vc_ensemble_variants <- dplyr::full_join(reported_variants$mutect2, reported_variants$strelka, by = mincol, suffix = c(".m2", ".strelka")) %>% 
+  dplyr::group_by(sample, paramRangeID) %>% 
+  dplyr::filter(row_number() == 1) %>% 
+  dplyr::group_by(SYMBOL) %>% 
+  dplyr::mutate(recurrence = paste(as.character(sample), collapse = ";")) %>% 
+  dplyr::mutate(counts = dplyr::n()) %>% 
+  dplyr::arrange(desc(counts), SYMBOL) %>% 
+  dplyr::filter(SYMBOL != "RB1") %>% 
+  dplyr::filter(!(sample == "31-T" & is.na(AF.TUMOR.strelka))) %>%
+  identity()
+
+write_csv(vc_ensemble_variants, "../results/vc_ensemble_mutect2_strelka_vars.csv")
+
+mincols <- c("sample", "SYMBOL", "HGVSc", "HGVSp", "AF.TUMOR", "AF.NORMAL", "Consequence", "seqnames", "start", "end", "REF", "ALT", "recurrence")
+
+vc_ensemble_variants %>% 
+  dplyr::mutate(
+    HGVSc = dplyr::coalesce(HGVSc.m2, HGVSc.strelka),
+    HGVSp = dplyr::coalesce(HGVSp.m2, HGVSp.strelka),
+    AF.TUMOR = dplyr::coalesce(AF.TUMOR.m2, AF.TUMOR.strelka),
+    AF.NORMAL = dplyr::coalesce(AF.NORMAL.m2, AF.NORMAL.strelka),
+  ) %>% 
+  dplyr::select(mincols) %>% 
+  write_csv("../doc/RB_exome_manuscript/stachelek_supplemental/table_s06.csv")
+
+
+
+```
+
+# load vc ensemble variants 
+
+```{r }
+vc_ensemble_variants <- read_csv("../results/vc_ensemble_mutect2_strelka_vars.csv")
+```
+
+### reynolds ensemble variants
+
+```{r rb_exome29}
+
+reynolds_somatic_variants_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv"
+reynolds_somatic_variants <- read_csv(reynolds_somatic_variants_path)
+
+
+mincol <- c("sample", "seqnames", "start", "end", "REF", "ALT", "paramRangeID", "SYMBOL", "Consequence")
+
+mincol <- c("sample", "seqnames", "start", "end", "REF", "ALT", "SYMBOL", "paramRangeID", "Consequence")
+
+reported_variants <- list(reported_m2_reynolds_somatic_vars)
+
+additional_col <- c("AF.TUMOR", "AD.1", "AD.2", "HGVSc", "HGVSp", "gnomAD_AF") %>% 
+  set_names(.)
+
+expandedcol <- c(mincol, additional_col)
+
+reported_variants <- purrr::map(reported_variants, ~dplyr::select(.x, one_of(expandedcol)))
+
+# variants found by both callers
+reynolds_ensemble_variants <-  
+  dplyr::bind_rows(reported_variants) %>% 
+  # dplyr::mutate(paramRangeID = snp_id) %>% 
+  dplyr::group_by(sample, seqnames, start, end) %>%
+  dplyr::filter(row_number() == 1) %>%
+  dplyr::group_by(SYMBOL) %>%
+  dplyr::mutate(recurrence = paste(as.character(sample), collapse = ";")) %>%
+  dplyr::mutate(counts = dplyr::n()) %>%
+  dplyr::arrange(desc(counts), SYMBOL) %>%
+  dplyr::filter(SYMBOL != "RB1") %>% 
+  identity()
+
+
+names(additional_col) <- paste0(additional_col, ".m2")
+
+reynolds_ensemble_variants <- dplyr::rename(reynolds_ensemble_variants, {{additional_col}})
+
+write_csv(reynolds_ensemble_variants, "../results/reynolds_ensemble_mutect2_strelka_vars.csv")
+
+```
+
+# load reynolds ensemble variants 
+
+```{r }
+reynolds_ensemble_variants <- read_csv("../results/reynolds_ensemble_mutect2_strelka_vars.csv")
+
+```
+
+# 13. load somatic variants
+
+```{r rb_exome31}
+good_cols <- 
+c("sample", chromosome = "seqnames", "start", "end", "REF", "ALT", "SYMBOL", 
+"Consequence", "HGVSc", "HGVSp", "recurrence", 
+"counts", "AF.TUMOR.m2", "AD.TUMOR.1.m2", 
+"AD.TUMOR.2.m2", "AF.NORMAL.m2", "AD.NORMAL.1.m2", "AD.NORMAL.2.m2", 
+"AF.TUMOR.strelka", "AD.TUMOR.1.strelka", 
+"AD.TUMOR.2.strelka", "AF.NORMAL.strelka", "AD.NORMAL.1.strelka", 
+"AD.NORMAL.2.strelka")
+
+vc_somatic_variants <- read_csv("../results/vc_ensemble_mutect2_strelka_vars.csv") %>% 
+dplyr::mutate(HGVSp = dplyr::coalesce(HGVSp.m2, HGVSp.strelka)) %>% 
+  dplyr::mutate(HGVSc = dplyr::coalesce(HGVSc.m2, HGVSc.strelka)) %>% 
+  dplyr::select(good_cols)
+
+# test0 <- 
+#   vc_somatic_variants %>% 
+#   dplyr::filter(sample %in% c("24-T", "41-CL", "41-T"))
+
+
+  
+
+vc_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s06.csv")
+write_csv(vc_somatic_variants, vc_somatic_variants_path)
+
+```
+
+```{r }
+good_cols <- c("sample", chromosome = "seqnames", "start", "end", "REF", "ALT", "SYMBOL", "Consequence", "HGVSc", "HGVSp", "recurrence", "counts", "AF.TUMOR", "AD.TUMOR.1", "AD.TUMOR.2")
+
+reynolds_somatic_variants_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv"
+
+pathogenic_cols <- c("proteine", "aaref", "aaalt", "rfPred_score", "SIFT_score", "MutationTaster_score")
+
+reynolds_somatic_variants <- read_csv(reynolds_somatic_variants_path) %>% 
+  dplyr::group_by(sample, SYMBOL) %>% 
+  # dplyr::filter(row_number() == 1) %>% 
+  # dplyr::filter(IMPACT %in% c("HIGH")) %>% 
+  dplyr::filter(proteine != "no matching" & aaref != "no matching") %>% 
+  dplyr::filter(path_meta_score > 3) %>% 
+  dplyr::filter(!SYMBOL == "RB1") %>% 
+  # dplyr::select(good_cols) %>%
+  identity()
+
+reynolds_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s07.csv")
+write_csv(reynolds_somatic_variants, reynolds_somatic_variants_path)
+
+# ensemble_variants <- dplyr::bind_rows(vc_ensemble_variants, reynolds_ensemble_variants)
+
+```
+
+
+# 14. compile all_author_variants: list of all genes from stachelek plus prior studies (Kooi, Zhang, McEvoy, Grobner)
+
+```{r compile_all_author_variants, child="all_author_variants.Rmd", eval = F}
+
+```
+
+
+```{r rb_exome34}
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+all_author_variants <- read_csv(all_author_variants_path)
+
+```
+
+# 11. tally vc somatic variants
+
+```{r rb_exome28}
+
+# tally strelka variants
+
+unfiltered_somatic_variants_path <- "../results/vc_ensemble_mutect2_strelka_vars.csv"
+unfiltered_vc_somatic_variants <- read_csv(unfiltered_somatic_variants_path)
+
+vc_somatic_variants <- unfiltered_vc_somatic_variants
+
+strelka_vc_tally <- vc_somatic_variants %>% 
+  dplyr::filter(!is.na(AF.TUMOR.strelka)) %>%
+  dplyr::mutate(sample_type = case_when(grepl("T", sample) ~ "Tumor",
+                                        grepl("CL", sample) ~ "Cell Line")) %>%
+  janitor::tabyl(sample_type) %>%
+  identity()
+
+# tally m2 variants
+m2_vc_tally <- vc_somatic_variants %>% 
+  dplyr::filter(!is.na(AF.TUMOR.m2)) %>% 
+  dplyr::mutate(sample_type = case_when(grepl("T", sample) ~ "Tumor",
+                                        grepl("CL", sample) ~ "Cell Line")) %>%
+  dplyr::filter(sample != "31-T") %>%
+  janitor::tabyl(sample_type) %>%
+  identity()
+
+total_vc_tally <- vc_somatic_variants %>% 
+  dplyr::mutate(sample_type = case_when(grepl("T", sample) ~ "Tumor",
+                                        grepl("CL", sample) ~ "Cell Line")) %>%
+  dplyr::filter(sample != "31-T") %>%
+  dplyr::mutate(VAF.TUMOR = dplyr::coalesce(AF.TUMOR.m2, AF.TUMOR.strelka)) %>% 
+  # janitor::tabyl(sample_type) %>%
+  # dplyr::filter(sample_type == "Cell Line") %>%
+  identity()
+
+strelka_vc_tally
+
+m2_vc_tally
+
+janitor::tabyl(total_vc_tally, sample_type)
+
+
+# vc_somatic_variants <- unfiltered_somatic_variants_path
+
+
+```
+
+# 12. tally reynolds somatic variants
+
+```{r rb_exome30}
+
+# tally m2 variants
+m2_reynolds_tally <- reynolds_somatic_variants %>% 
+  dplyr::pull(gene) %>%
+  # unique() %>%
+  length() %>% 
+  identity()
+
+```
+
+# 19. calculate recurrence of variants
+
+```{r calc_variant_recurrence, child="calc_variant_recurrence.Rmd", eval = F}
+
+```
+
+### load recurrent vc tumors and cell lines
+
+```{r rb_exome44}
+recurrent_vc_vars <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv")
+```
+
+```{r rb_exome45}
+# write_csv(m2_3a_genes_reynolds, "~/rb_pipeline/doc/RB_exome_manuscript/SNV/m2_reynolds_3a_genes.csv")
+
+bcor_recurrences <- 
+  dplyr::filter(prior_author_variants, gene == "BCOR") %>% 
+  select(sample, author) %>% 
+  identity()
+  
+number_of_samples <- n_distinct(prior_author_variants$sample)
+
+```
+
+### load recurrent vc variants 
+
+```{r rb_exome47}
+recurrent_vc_vars <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv")
+```
+
+### load recurrent reynolds cell lines 
+
+```{r rb_exome47}
+recurrent_reynolds_vars <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s11.csv")
+```
+
+# all recurrent vars 
+
+```{r }
+recurrent_vars <- dplyr::bind_rows(recurrent_vc_vars, recurrent_reynolds_vars)
+
+write_csv(recurrent_vars, "~/rb_pipeline/results/SNV/recurrent_vars.csv")
+```
+
+# 20. load reported strelka variants
+
+```{r rb_exome48}
+reported_strelka_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_strelka_vc_somatic_variants.csv"
+
+reported_strelka_somatic_vars <- read_csv(reported_strelka_vars_path)
+```
+
+# 21. load reported m2 variants
+
+```{r rb_exome49}
+reported_vars_path <- "../doc/RB_exome_manuscript/SNV/reported_m2_vc_somatic_variants.csv"
+reported_m2_vc_somatic_vars <- read_csv(reported_vars_path)
+
+### load reported reynolds variants
+reported_m2_reynolds_somatic_vars <- read_csv("../doc/RB_exome_manuscript/SNV/reported_m2_reynolds_somatic_variants.csv")
+
+short_stat <- function(stat_function, vector){
+  signif(stat_function(vector), digits = 2)
+}
+
+```
+
+# 22. waterfall plots
+
+## load all author variants
+
+```{r rb_exome50}
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+all_author_variants <- read_csv(all_author_variants_path)
+```
+
+## waterfall plot all tumor and/or cell line variants
+
+```{r waterfall, child = "SNV/waterfall_plots.Rmd"}
+
+```
+
+
+# 23. Webgestalt analysis
+
+### webgestalt plot all tumor and/or cell line variants
+
+```{r webgestalt, child = "SNV/webgestalt_analysis.Rmd"}
+
+```
+
+
+# 24. check Kooi MYCNA samples
+
+```{r rb_exome67}
+kooi_mycna <- read_csv("~/rb_pipeline/doc/rb_variants_kooi_supp_info/tidy_format/MYCNA_segments.csv") %>% 
+  pull(ID)
+
+gtools::mixedsort(kooi_mycna)
+
+# filter(m2_5a_intxn$genes, grepl(paste0(kooi_mycna, collapse = "|"), reference_samples))
+#none found!
+
+```
+
+# 25. check for recurrence of kooi SCNA genes
+
+```{r rb_exome68}
+# CRB1 and NEK7 (1q-gain), SOX4 (6p-gain) and NUP205 (7q-gain) as novel retinoblastoma driver candidates. Depending on the sample subset and algorithms used, alternative candidates were identified including MIR181 (1q-gain) and DEK (6p gain)
+
+kooi_scna_genes <- c("CRB1", "NEK7", "SOX4", "NUP205", "MIR181", "DEK")
+
+dplyr::filter(reported_m2_reynolds_somatic_vars, SYMBOL %in% kooi_scna_genes)
+```
+
+None found!
+
+
+# 26. Inspect variants --------------------------------------
+
+look for variants in the same gene that are present more than once, using either varaint caller
+
+```{r rb_exome69, eval = F}
+
+# not intergenic, annotate number of recurrences of a given gene
+
+# not intergenic, annotate number of recurrences of a given gene
+pass_m2 <- dplyr::filter(m2_somatic_vars, FILTER == ".") %>% 
+  dplyr::filter(!is.na(SYMBOL)) %>% 
+  dplyr::group_by(sample, snp_id) %>% 
+  dplyr::filter(row_number() == 1) %>% 
+  dplyr::group_by(SYMBOL) %>% 
+  dplyr::mutate(recurrence = paste(as.character(sample), collapse = ";")) %>% 
+  dplyr::mutate(counts = dplyr::n()) %>% 
+  dplyr::arrange(desc(counts)) %>% 
+  identity()
+
+# present more than once
+filt_pass_m2 <- dplyr::filter(pass_m2, counts > 1)
+
+```
+
+
+
+# 27. inspect BCOR variants
+IN Mutect2:
+1. the BCOR variant at chrX	39932333	39932333 in 33-T is present at lower vaf in 33-CL but is being filtered at some step.
+2. There is no evidence for the varaint at 	chrX	39921622	39921622 in 28-CL even though it is present in 28-T. 
+3. It is a 10bp short indel, whereas the other is a missense variant 
+4. Reynolds lines, six have BCOR mutations
+
+In Strelka: 
+1. the BCOR variant at chrX	39932333	39932333 in 33-T is also present at final report in 33-CL. Both are present!
+2. There is no evidence for the varaint at 	chrX	39921622	39921622 in either 28-CL or 28-T at any stage of filtering!
+
+
+```{r rb_exome70, eval = F}
+# inspect m2 variants
+
+# in initial m2 vars list
+# initial_m2_vars <- list(m2_tidy_tumors0, m2_tidy_cell_lines0, m2_tidy_reynolds0)
+# m2_initial_bcor_vars <- purrr::map(initial_m2_vars, function(x) dplyr::filter(x, SYMBOL == "BCOR"))
+# lapply(m2_initial_bcor_vars, View)
+
+# in final m2 somatic vars list
+m2_bcor_vars <- purrr::map(m2_somatic_vars_list, function(x) dplyr::filter(x, SYMBOL == "BCOR")) 
+# lapply(m2_bcor_vars, View)
+
+# in initial strelka vars list
+# initial_strelka_vars <- list(tidy_strela_snvs0, tidy_strelka_indels0)
+# initial_strelka_bcor_vars <- purrr::map(initial_strelka_vars, function(x) dplyr::filter(x, SYMBOL == "BCOR")) 
+# lapply(initial_strelka_bcor_vars, View)
+
+# inspect strelka variants
+strelka_bcor_vars <- dplyr::filter(strelka_variants, SYMBOL == "BCOR")
+View(strelka_bcor_vars)
+  
+
+reynolds_bcor_vars <- dplyr::filter(m2_somatic_vars_list$reynolds_CL, SYMBOL == "BCOR")
+
+```
+
+# 28. double check variant filtration?
+
+look for variants that might have been mistakenly filtered based on the comparison between genes in the final filtered set and variants in those same genes in the unfiltered set
+
+
+```{r rb_exome71, eval = F}
+find_lost_vars <- function(fp_vars, vars){
+  
+  # retrieve genes in final passing variants
+  symbols <- unique(fp_vars$SYMBOL)
+  
+  mv <- dplyr::filter(vars, SYMBOL %in% symbols) %>% 
+    dplyr::group_by(sample, snp_id) %>% 
+    distinct()
+  
+  dim(mv)
+  
+  return(mv)
+  
+}
+
+lost_m2_somatic_vars <- find_lost_vars(reported_m2_vc_somatic_vars, m2_somatic_vars)
+dim(lost_m2_somatic_vars)
+```
+
+### load all author variants
+
+```{r rb_exome40b}
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+# all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s16.csv")
+
+all_author_variants <- read_csv(all_author_variants_path)
+```
+
+### load somatic variants
+
+```{r rb_exome36}
+vc_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s06.csv")
+vc_somatic_variants <- read_csv(vc_somatic_variants_path)
+
+reynolds_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s07.csv")
+reynolds_somatic_variants <- read_csv(reynolds_somatic_variants_path)
+```
+
+
+# ridgeline plot vaf by sample type
+
+```{r }
+
+vc_m2_somatic_vars <- dplyr::filter(all_author_variants, !grepl("[0-9]{3}-CL", sample)) %>% 
+  dplyr::filter(!is.na(VAF.m2)) %>%
+  dplyr::mutate(VAF = VAF.m2) %>% 
+  identity()
+
+vc_strelka_somatic_vars <- dplyr::filter(all_author_variants, !grepl("[0-9]{3}-CL", sample)) %>% 
+  dplyr::filter(!is.na(VAF.strelka)) %>%
+  dplyr::mutate(VAF = VAF.strelka) %>% 
+  identity()
+
+reynolds_m2_somatic_vars <- dplyr::filter(all_author_variants, grepl("^[0-9]{3}-CL", sample)) %>% 
+  # dplyr::filter(!is.na(VAF.m2)) %>% 
+  dplyr::mutate(VAF = VAF.m2) %>%
+  identity()
+
+somatic_vars <- dplyr::bind_rows(list("CHLA-VC-RB Called with Mutect2" = vc_m2_somatic_vars, "CHLA-VC-RB Called with Strelka2" = vc_strelka_somatic_vars, "CHLA-RB Called with Mutect2" = reynolds_m2_somatic_vars), .id = "variantcaller")
+
+vaf_by_cohort_plot <- 
+  # ggplot(somatic_vars, aes(x = VAF, y = variantcaller)) + 
+  ggplot(somatic_vars, aes(x = VAF)) + 
+  # geom_density_ridges(alpha = 0.1, aes(color = sample_type)) +
+  geom_density(alpha = 0.7, aes(VAF, stat(count), color = sample_type)) +
+  facet_wrap(~variantcaller) + 
+  labs(title = "Fig S2: Variant Allele Frequency Differs by Sequencing Cohort", y = "Variants Detected", color = "Sample Type") +
+  # geom_text_repel(color = "red", cex = 2.5) +
+  theme_cowplot() +
+  NULL
+
+ggsave(fs::path(proj_dir, "doc/RB_exome_manuscript/stachelek_supplemental/fig_s02.pdf"), vaf_by_cohort_plot, height = 14, width = 14)
+
+```
+
+# 32. Compare recurrent variants with list of all unfiltered variants
+
+### load unrefined m2 variants
+
+```{r m2_file_load06b, eval = F}
+sample_types <- c("tumors", "cell_lines")
+m2_collated_vars_ps_unrefined <- fs::path(proj_dir, "results", "SNV", paste0("tidy_m2_", sample_types, "_unfiltered.rds"))
+
+filter_vars <- function(vars){
+  vars <- vars %>% 
+    dplyr::filter(FILTER %in% c(".", "PASS")) %>% 
+    dplyr::filter(!is.na(HGVSc)) %>% 
+    identity()
+}
+
+m2_collated_vars_unrefined <- 
+  m2_collated_vars_ps_unrefined %>% 
+  purrr::map(readRDS) %>% 
+  # purrr::map(filter_vars) %>%
+  purrr::set_names(sample_types) %>% 
+  dplyr::bind_rows() %>% 
+  identity()
+
+
+
+```
+
+### variants found in reynolds 
+
+Exome sequencing of an additional 15 retinoblastoma cell lines revealed potentially pathogenic mutations in xx genes
+
+```{r, eval = F}
+
+recurrent_vars <- read_csv("~/rb_pipeline/results/SNV/recurrent_vars.csv") %>% 
+  dplyr::filter(series == "CHLA-RB") %>% 
+  dplyr::mutate(clonality = case_when(VAF.m2 > 0.3 ~ "clonal",
+                                      VAF.m2 < 0.3 ~ "subclonal")) %>%
+  
+  janitor::tabyl(gene, clonality) %>% 
+  identity()
+
+recurrently_mutated_genes <- recurrent_vars %>% 
+  dplyr::pull(gene)
+
+print(length(recurrently_mutated_genes))
+
+clonal_vars <- recurrent_vars %>% 
+  dplyr::filter(clonal == 1) %>% 
+  dplyr::pull(gene) %>% 
+  unique() %>% 
+  identity()
+
+subclonal_vars <- recurrent_vars %>% 
+  dplyr::filter(subclonal == 1) %>% 
+  dplyr::pull(gene) %>% 
+  unique() %>% 
+  identity()
+
+```
+
+# recurrent changes were found in the same tumor?
+
+```{r }
+recurrent_vars_t <- read_csv("~/rb_pipeline/results/SNV/recurrent_vars.csv") %>% 
+  dplyr::filter(sample_type == "Tumor")
+
+test0 <- recurrent_vars_t %>% 
+  dplyr::group_by(sample, gene) %>% 
+  dplyr::filter(row_number() == 1) %>% 
+  identity()
+
+
+
+```
+
+# 33. check for overlap between stchlk SCNAs and Kooi SCNA peak regions
+
+```{r rb_exome74, eval = F}
+kooi_per_gene_SCNA_path <- "~/rb_pipeline/doc/SCNA_meta_analysis_kooi_supporting_information/tidy_format/per_gene_SCNA_gain_loss_val_kooi.csv"
+per_gene_SCNA <- read_csv(kooi_per_gene_SCNA_path)
+
+peak_coords <- per_gene_SCNA[!is.na(per_gene_SCNA$peak),]
+
+peak_coords <- split(peak_coords, peak_coords$peak)
+
+get_peak_coords <- function(peak_dat){
+  # browser()
+  peak_start <- min(peak_dat$start)
+  peak_end <- max(peak_dat$end)
+  chrom <- peak_dat$seqnames[[1]]
+  cn_change <- ifelse(sum(peak_dat$gain.loss.difference) > 0, "gain", "loss")
+  
+  return(list( "chr" = chrom, "feature_start" = peak_start, "feature_end" = peak_end, "cn_change" = cn_change))
+}
+
+kooi_peak_regions <- purrr::map_df(peak_coords, get_peak_coords)
+
+write_csv(kooi_peak_regions, "~/rb_pipeline/doc/SCNA/kooi_SCNA_peak_regions.csv", row.names = F)
+
+```
+
+# 34. find overlapping segments in SCNA
+
+```{r rb_exome75, eval = F}
+
+seg_span_gene <- function(baf_seg, chr, feature_start, feature_end, cn_change, ...){
+  
+  baf_segment <- dplyr::filter(baf_seg, chrom == chr & (!(start < feature_start & end < feature_end) & !(start > feature_end & end > feature_end))) %>% 
+    dplyr::select(-ID)
+  
+  if (cn_change == "gain"){
+    baf_segment <- dplyr::filter(baf_segment, seg.mean > 0) 
+  } else if (cn_change == "loss"){
+    baf_segment <- dplyr::filter(baf_segment, seg.mean < 0)
+  }
+  
+  return(baf_segment)
+}
+
+kooi_peak_regions <- read_csv("~/rb_pipeline/doc/SCNA/kooi_SCNA_peak_regions.csv", stringsAsFactors = F)
+
+kooi_peak_list <- lapply(kooi_peak_regions, "[")
+kooi_peak_list <- unname(lapply(kooi_peak_list, function(x) unname(as.list(x))))
+
+# output vc seg
+vc_seg_path <- "~/rb_pipeline/results/SCNA/vc_SCNA_segments.txt"
+vc_seg <- read_tsv(vc_seg_path)
+
+# output reynolds seg
+reynolds_seg_path <- "~/rb_pipeline/results/SCNA/reynolds_SCNA_segments.txt"
+reynolds_seg <- read_tsv(reynolds_seg_path)
+
+vc_seg_overlap_path <- "~/rb_pipeline/results/SCNA/vc_seg_overlap_kooi_peaks.csv"  
+vc_seg_in_kooi_peaks <- purrr::pmap(kooi_peak_list, function(a,b,c,d) seg_span_gene(vc_seg, a, b, c, d))
+vc_seg_in_kooi_peaks <- rbindlist(vc_seg_in_kooi_peaks)
+write.csv(vc_seg_in_kooi_peaks, vc_seg_overlap_path)
+
+reynolds_seg_overlap_path <- "~/rb_pipeline/results/SCNA/reynolds_seg_overlap_kooi_peaks.csv"
+reynolds_seg_in_kooi_peaks <- purrr::pmap(kooi_peak_list, function(a,b,c, d) seg_span_gene(reynolds_seg, a, b, c, d))
+reynolds_seg_in_kooi_peaks <- rbindlist(reynolds_seg_in_kooi_peaks)
+write.csv(reynolds_seg_in_kooi_peaks, reynolds_seg_overlap_path)  
+```
+
+
+# 35. play with somatic signatures 
+
+```{r rb_exome76, eval = F}
+
+library(SomaticSignatures)
+library(BSgenome.Hsapiens.UCSC.hg19)
+
+
+read_vr <- function(vr0, sample_name){
+  vr <- as(vr0, "VRanges")
+
+  #Only SNV substitutions are currently supported; need to remove indels
+  idx_snv = ref(vr) %in% DNA_BASES & alt(vr) %in% DNA_BASES
+  vr = vr[idx_snv]
+  vr$sample_name <- sample_name
+
+  #drop softFilterMatrix, which would otherwise summarize GATK filter field, disallow concat of mult. vranges
+  resetFilter(vr)
+  return(vr)
+}
+
+vr_list <- map2(m2_tumor_list, names(m2_tumor_list), read_vr)
+
+vr0 <- Reduce(c, vr_list)
+
+sca_motifs = mutationContext(vr0, BSgenome.Hsapiens.UCSC.hg19)
+
+sca_mm = motifMatrix(sca_motifs, group = "sample_name", normalize = TRUE)
+
+head(round(sca_mm, 4))
+
+pdf("~/rb_pipeline/results/SNV/somatic_signatures_stachelek.pdf")
+plotMutationSpectrum(sca_motifs, "sample_name")
+dev.off()
+
+n_sigs = 2:8
+
+gof_nmf = assessNumberSignatures(sca_mm, n_sigs, nReplicates = 5)
+
+gof_pca = assessNumberSignatures(sca_mm, n_sigs, pcaDecomposition)
+
+plotNumberSignatures(gof_nmf)
+
+plotNumberSignatures(gof_pca)
+
+head(sca_motifs)
+```
+
+
+# 36. plot VAF distribution 
+
+```{r rb_exome77, eval = F}
+
+ggplot(strelka_variants, aes(AF.TUMOR)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+
+ggplot(m2_somatic_vars, aes(AF.TUMOR)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+
+
+ggplot(kooi_vars, aes(VAF)) + geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(breaks = pretty(m2_tidy_tumors$AF.TUMOR, n = 20)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(text = element_text(size=20))
+
+
+```
+

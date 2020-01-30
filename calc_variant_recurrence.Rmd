@@ -1,0 +1,115 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+### load all author variants
+
+```{r rb_exome40}
+all_author_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental", "table_s01.csv")
+
+all_author_variants <- read_csv(all_author_variants_path)
+```
+
+### vc tumors and cell lines
+
+```{r }
+
+  recurrent_vars <-
+    vars %>% 
+    dplyr::group_by(gene, sample) %>%
+    dplyr::filter(dplyr::row_number() == 1) %>%
+    dplyr::group_by(gene) %>%
+    dplyr::mutate(sample_types = paste0(sample_type, collapse = "; ")) %>% 
+    dplyr::mutate(sample_types = strsplit(sample_types, split = "; ")) %>%
+    dplyr::filter(grepl("Tumor", sample_types)) %>%
+    dplyr::select(-sample_types) %>%
+    dplyr::mutate(recurrence = dplyr::n()) %>%
+    dplyr::mutate(sample_number = str_extract(sample, "[0-9]+")) %>%
+    dplyr::filter(n_distinct(sample_number) > 1) %>%
+    dplyr::mutate(recurrence = paste0(author, ":", sample, collapse = ": ")) %>%
+  View() %>% 
+    identity()
+
+
+calc_recurrent_vars <- function(vars, antiseries = "CHLA-RB") {
+  
+  recurrent_vars <-
+    vars %>% 
+    dplyr::filter(series != antiseries) %>% 
+    dplyr::group_by(gene, sample) %>%
+    dplyr::filter(dplyr::row_number() == 1) %>%
+    dplyr::group_by(gene) %>%
+    dplyr::mutate(sample_types = paste0(sample_type, collapse = "; ")) %>% 
+    # dplyr::mutate(sample_types = strsplit(sample_types, split = "; ")) %>%
+    # dplyr::filter(grepl("Tumor", sample_types)) %>%
+    dplyr::select(-sample_types) %>% 
+    dplyr::mutate(recurrence = dplyr::n()) %>%
+    dplyr::mutate(sample_number = str_extract(sample, "[0-9]+")) %>% 
+    dplyr::filter(n_distinct(sample_number) > 1) %>%
+    dplyr::mutate(recurrence = paste0(author, ":", sample, collapse = ": ")) %>% 
+    identity()
+  
+  return(recurrent_vars)
+}
+
+```
+
+```{r }
+
+recurrent_vc_vars <- calc_recurrent_vars(all_author_variants, antiseries = "CHLA-RB")
+
+good_cols <- c("sample", "author", "gene", "Consequence", "VAF", "HGVSp", "chr", "start", "end", "hg18_pos", "ref", "alt", "AD.NORMAL.1.m2", "AD.NORMAL.2.m2", "AD.TUMOR.1.m2", "AD.TUMOR.2.m2", "AD.NORMAL.1.strelka", "AD.NORMAL.2.strelka", "AD.TUMOR.1.strelka", "AD.TUMOR.2.strelka", "sample_type", "series", "recurrence", "sample_number")
+
+recurrent_vc_vars <- recurrent_vc_vars %>% 
+  dplyr::filter(series == "CHLA-VC-RB") %>%
+  dplyr::mutate(VAF = dplyr::coalesce(VAF.m2, VAF.strelka)) %>%
+  dplyr::select(good_cols) %>% 
+  identity()
+  
+write_csv(recurrent_vc_vars, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s10.csv")
+  
+```
+
+### reynolds cell lines
+
+```{r }
+
+reynolds_somatic_variants_path <- fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s07.csv")
+
+reynolds_somatic_variants <- read_csv(reynolds_somatic_variants_path) %>% 
+  dplyr::mutate(series = "CHLA-RB", author = "stachelek et al.") %>% 
+  dplyr::rename(gene = SYMBOL) %>% 
+  dplyr::select(one_of(colnames(all_author_variants))) %>% 
+identity()
+
+all_author_variants <- all_author_variants %>% 
+  dplyr::bind_rows(reynolds_somatic_variants)
+
+recurrent_reynolds_vars <- calc_recurrent_vars(all_author_variants, antiseries = "CHLA-VC-RB") 
+
+good_cols <- c("sample", "author", "gene", "Consequence", "VAF", "HGVSp", "chr", "start", "end", "hg18_pos", "ref", 
+"alt", "AD.NORMAL.1" = "AD.NORMAL.1.m2", "AD.NORMAL.2" = "AD.NORMAL.2.m2", "AD.TUMOR.1" = "AD.TUMOR.1.m2", "AD.TUMOR.2" = "AD.TUMOR.2.m2", "sample_type", "series", "recurrence", "sample_number")
+
+recurrent_reynolds_vars <- 
+  recurrent_reynolds_vars %>% 
+  dplyr::filter(series == "CHLA-RB") %>% 
+  dplyr::mutate(VAF = dplyr::coalesce(VAF.m2, VAF.strelka)) %>% 
+  dplyr::select(good_cols) %>% 
+  identity()
+
+write_csv(recurrent_reynolds_vars, "~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s11.csv")
+
+```

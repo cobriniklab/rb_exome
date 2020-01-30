@@ -1,0 +1,339 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+library(PureCN)
+set.seed(1234)
+```
+
+```{r}
+## ----examplegc-------------------------------------------------------------
+reference.file <- system.file("extdata", "ex2_reference.fa", 
+    package = "PureCN", mustWork = TRUE)
+bed.file <- system.file("extdata", "ex2_intervals.bed", 
+        package = "PureCN", mustWork = TRUE)
+mappability.file <- system.file("extdata", "ex2_mappability.bigWig", 
+        package = "PureCN", mustWork = TRUE)
+
+intervals <- import(bed.file)
+mappability <- import(mappability.file)
+
+preprocessIntervals(intervals, reference.file, 
+    mappability=mappability, output.file = "ex2_gc_file.txt")
+```
+
+
+```{r}
+## ----examplecoverage-------------------------------------------------------
+bam.file <- system.file("extdata", "ex1.bam", package="PureCN", 
+    mustWork = TRUE)
+interval.file <- system.file("extdata", "ex1_intervals.txt", 
+    package = "PureCN", mustWork = TRUE)
+
+calculateBamCoverageByInterval(bam.file = bam.file, 
+ interval.file = interval.file, output.file = "ex1_coverage.txt")
+```
+
+
+```{r}
+## ----example_files, message=FALSE, warning=FALSE, results='hide'-----------
+library(PureCN)
+
+normal.coverage.file <- system.file("extdata", "example_normal.txt",
+    package="PureCN") 
+normal2.coverage.file <- system.file("extdata", "example_normal2.txt", 
+    package="PureCN") 
+normal.coverage.files <- c(normal.coverage.file, normal2.coverage.file) 
+tumor.coverage.file <- system.file("extdata", "example_tumor.txt", 
+    package="PureCN") 
+seg.file <- system.file("extdata", "example_seg.txt",
+    package = "PureCN")
+vcf.file <- system.file("extdata", "example.vcf.gz", package="PureCN")
+interval.file <- system.file("extdata", "example_intervals.txt", 
+    package="PureCN")
+```
+
+
+```{r}
+## ----figuregccorrect, fig.show='hide', fig.width=7, fig.height=7, warning=FALSE----
+correctCoverageBias(normal.coverage.file, interval.file, 
+    output.file="example_normal_loess.txt", plot.bias=TRUE)
+```
+
+
+```{r}
+## ----normaldb--------------------------------------------------------------
+normalDB <- createNormalDatabase(normal.coverage.files)
+# serialize, so that we need to do this only once for each assay
+saveRDS(normalDB, file="normalDB.rds")
+```
+
+
+```{r}
+## ----normaldbpca-----------------------------------------------------------
+normalDB <- readRDS("normalDB.rds")
+pool <- calculateTangentNormal(tumor.coverage.file, normalDB)
+```
+
+
+```{r}
+## ----calculatemappingbias--------------------------------------------------
+# speed-up future runtimes by pre-calculating variant mapping biases
+normal.panel.vcf.file <- system.file("extdata", "normalpanel.vcf.gz", 
+                                     package="PureCN")
+
+bias <- calculateMappingBiasVcf(normal.panel.vcf.file, genome = "h19")
+saveRDS(bias, "mapping_bias.rds")
+normal.panel.vcf.file <- "mapping_bias.rds"
+```
+
+
+```{r}
+## ----targetweightfile1, message=FALSE--------------------------------------
+interval.weight.file <- "interval_weights.txt"
+calculateIntervalWeights(normalDB$normal.coverage.files, interval.weight.file)
+```
+
+
+```{r}
+## ----ucsc_segmental--------------------------------------------------------
+# Instead of using a pool of normals to find low quality regions,
+# we use suitable BED files, for example from the UCSC genome browser.
+
+# We do not download these in this vignette to avoid build failures 
+# due to internet connectivity problems.
+downloadFromUCSC <- FALSE
+if (downloadFromUCSC) {
+    library(rtracklayer)
+    mySession <- browserSession("UCSC")
+    genome(mySession) <- "hg19"
+    simpleRepeats <- track( ucscTableQuery(mySession, 
+        track="Simple Repeats", table="simpleRepeat"))
+    export(simpleRepeats, "hg19_simpleRepeats.bed")
+}
+
+snp.blacklist <- "hg19_simpleRepeats.bed"
+```
+
+
+```{r}
+## ----runpurecn-------------------------------------------------------------
+ret <-runAbsoluteCN(normal.coverage.file=pool,
+# normal.coverage.file=normal.coverage.file, 
+    tumor.coverage.file=tumor.coverage.file, vcf.file=vcf.file, 
+    genome="hg19", sampleid="Sample1", 
+    interval.file=interval.file, normalDB=normalDB,
+# args.setMappingBiasVcf=list(normal.panel.vcf.file=normal.panel.vcf.file),
+# args.filterVcf=list(snp.blacklist=snp.blacklist, 
+# stats.file=mutect.stats.file), 
+    args.segmentation=list(interval.weight.file=interval.weight.file), 
+    post.optimize=FALSE, plot.cnv=FALSE, verbose=FALSE)
+```
+
+
+```{r}
+## ----createoutput----------------------------------------------------------
+file.rds <- "Sample1_PureCN.rds"
+saveRDS(ret, file=file.rds)
+pdf("Sample1_PureCN.pdf", width=10, height=11)
+plotAbs(ret, type="all")
+dev.off()
+```
+
+
+```{r}
+## ----figureexample1, fig.show='hide', fig.width=6, fig.height=6------------
+plotAbs(ret, type="overview")
+```
+
+
+```{r}
+## ----figureexample2, fig.show='hide', fig.width=6, fig.height=6------------
+plotAbs(ret, 1, type="hist")
+```
+
+
+```{r}
+## ----figureexample3, fig.show='hide', fig.width=8, fig.height=8------------
+plotAbs(ret, 1, type="BAF")
+```
+
+
+```{r}
+## ----figureexample3b, fig.show='hide', fig.width=9, fig.height=8-----------
+plotAbs(ret, 1, type="BAF", chr="chr19")
+```
+
+
+```{r}
+## ----figureexample4, fig.show='hide', fig.width=8, fig.height=8------------
+plotAbs(ret, 1, type="AF")
+```
+
+
+```{r}
+## ----output1---------------------------------------------------------------
+names(ret)
+```
+
+
+```{r}
+## ----output3---------------------------------------------------------------
+head(predictSomatic(ret), 3)
+```
+
+
+```{r}
+## ----output4---------------------------------------------------------------
+vcf <- predictSomatic(ret, return.vcf=TRUE)
+writeVcf(vcf, file="Sample1_PureCN.vcf")
+```
+
+
+```{r}
+## ----calling2--------------------------------------------------------------
+gene.calls <- callAlterations(ret)
+head(gene.calls)
+```
+
+
+```{r}
+## ----loh-------------------------------------------------------------------
+loh <- callLOH(ret)
+head(loh)
+```
+
+
+```{r}
+## ----curationfile----------------------------------------------------------
+createCurationFile(file.rds)
+```
+
+
+```{r}
+## ----readcurationfile------------------------------------------------------
+ret <- readCurationFile(file.rds)
+```
+
+
+```{r}
+## ----curationfileshow------------------------------------------------------
+read.csv("Sample1_PureCN.csv")
+```
+
+
+```{r}
+## ----customseg-------------------------------------------------------------
+retSegmented <- runAbsoluteCN(seg.file=seg.file, 
+    interval.file=interval.file, vcf.file=vcf.file, 
+    max.candidate.solutions=1, genome="hg19",
+    test.purity=seq(0.3,0.7,by=0.05), verbose=FALSE, 
+    plot.cnv=FALSE)
+```
+
+
+```{r}
+## ----figurecustombaf, fig.show='hide', fig.width=8, fig.height=8-----------
+plotAbs(retSegmented, 1, type="BAF")
+```
+
+
+```{r}
+## ----customlogratio, message=FALSE-----------------------------------------
+# We still use the log2-ratio exactly as normalized by PureCN for this
+# example
+log.ratio <- calculateLogRatio(readCoverageFile(normal.coverage.file),
+    readCoverageFile(tumor.coverage.file))
+
+retLogRatio <- runAbsoluteCN(log.ratio=log.ratio,
+    interval.file=interval.file, vcf.file=vcf.file, 
+    max.candidate.solutions=1, genome="hg19",
+    test.purity=seq(0.3,0.7,by=0.05), verbose=FALSE, 
+    normalDB=normalDB, plot.cnv=FALSE)
+```
+
+
+```{r}
+## ----figuremultiplesamples, fig.show='hide', fig.width=6, fig.height=3-----
+
+tumor2.coverage.file <- system.file("extdata", "example_tumor2.txt",
+    package="PureCN")
+
+tumor.coverage.files <- c(tumor.coverage.file, tumor2.coverage.file)
+
+seg <- processMultipleSamples(tumor.coverage.files,
+         sampleids = c("Sample1", "Sample2"),
+         normalDB = normalDB,
+         interval.weight.file = interval.weight.file,
+         genome = "hg19", verbose = FALSE)
+seg.file <- tempfile(fileext = ".seg")
+write.table(seg, seg.file, row.names = FALSE, sep = "\t")
+retMulti <- runAbsoluteCN(tumor.coverage.file = tumor.coverage.file, 
+    normal.coverage.file = pool, 
+    seg.file = seg.file, vcf.file = vcf.file, max.candidate.solutions = 1, 
+    fun.segmentation = segmentationHclust, plot.cnv = FALSE,
+    genome = "hg19", min.ploidy = 1.5, max.ploidy = 2.1, 
+    test.purity = seq(0.4, 0.7, by = 0.05), sampleid = "Sample1",
+    post.optimize = TRUE)
+```
+
+
+```{r}
+## ----callmutationburden----------------------------------------------------
+callableBed <- import(system.file("extdata", "example_callable.bed.gz", 
+    package = "PureCN"))
+
+callMutationBurden(ret, callable=callableBed)
+```
+
+
+```{r}
+## ----power1, fig.show='hide', fig.width=6, fig.height=6--------------------
+purity <- c(0.1,0.15,0.2,0.25,0.4,0.6,1)
+coverage <- seq(5,35,1)
+power <- lapply(purity, function(p) sapply(coverage, function(cv) 
+    calculatePowerDetectSomatic(coverage=cv, purity=p, ploidy=2, 
+    verbose=FALSE)$power))
+```
+
+
+```{r}
+# Figure S7b in Carter et al.
+plot(coverage, power[[1]], col=1, xlab="Sequence coverage", 
+    ylab="Detection power", ylim=c(0,1), type="l")
+
+for (i in 2:length(power)) lines(coverage, power[[i]], col=i)
+abline(h=0.8, lty=2, col="grey")     
+legend("bottomright", legend=paste("Purity", purity),
+    fill=seq_along(purity))
+```
+
+
+```{r}
+## ----power2, fig.show='hide', fig.width=6, fig.height=6--------------------
+coverage <- seq(5,350,1)
+power <- lapply(purity, function(p) sapply(coverage, function(cv) 
+    calculatePowerDetectSomatic(coverage=cv, purity=p, ploidy=2, 
+    cell.fraction=0.2, verbose=FALSE)$power))
+plot(coverage, power[[1]], col=1, xlab="Sequence coverage", 
+    ylab="Detection power", ylim=c(0,1), type="l")
+
+for (i in 2:length(power)) lines(coverage, power[[i]], col=i)
+abline(h=0.8, lty=2, col="grey")     
+legend("bottomright", legend=paste("Purity", purity),
+    fill=seq_along(purity))
+```

@@ -1,0 +1,324 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(cowplot)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+```{r}
+per_base_depths <- fs::path(proj_dir, "output/mosdepth/") %>% 
+  dir_ls(glob = "*region.dist.txt") %>%
+  purrr::map(read_tsv, col_names = F) %>%
+  purrr::map(~set_names(.x, c("chr", "coverage", "percent_covered"))) %>%
+  identity()
+```
+
+```{r}
+
+cohort_dfs <- dplyr::bind_rows(per_base_depths, .id = "sample") %>% 
+  mutate(sample = gsub("\\..*", "", fs::path_file(`sample`))) %>%
+  dplyr::filter(percent_covered != 0) %>%
+  dplyr::mutate(sample_type = case_when(grepl("^[0-9]{2}-CL", sample) ~ "CHLA-VC-RB Cell Line",
+                                        grepl("^[0-9]{3}-CL", sample) ~ "CHLA-RB Cell Line",
+                                        grepl("T", sample) ~ "CHLA-VC-RB Tumor",
+                                        grepl("N", sample) ~ "CHLA-VC-RB Matched Normal")) %>%
+  split(.$sample_type) %>%
+  identity()
+
+make_coverage_plot <- function(counts_df, df_title){
+  ggplot(counts_df, aes(x = coverage, y = percent_covered, color = sample)) + 
+    geom_smooth(se=F) + 
+    labs(title = df_title, x = "Coverage", y = "Percent Covered") + 
+    ylim(0, 1) +
+    xlim(0, 1000) + 
+    theme_cowplot()
+}
+
+coverage_paths <- paste0("../doc/RB_exome_manuscript/SNV/", c("cell_line", "tumor", "normal"), "_coverage_plot.pdf")
+
+coverage_plots <- purrr::imap(cohort_dfs, make_coverage_plot)
+
+# purrr::map2(coverage_plots, coverage_paths, ~ggsave(.y, plot= .x))
+
+# png("../doc/RB_exome_manuscript/SNV/coverage_plots.png")
+# coverage_plots$tumor + coverage_plots$cell_line + coverage_plots$normal + plot_layout(ncol = 1)
+# dev.off()
+
+```
+
+```{r}
+
+names(coverage_plots) <- paste0("p", c(1,2,3,4))
+
+coverage_curve_plot <- cowplot::plot_grid(coverage_plots$p1, coverage_plots$p2, coverage_plots$p3, coverage_plots$p4, ncol = 2, labels = c("A", "B", "C", "D"))
+
+# ggsave("~/rb_pipeline/doc/RB_exome_manuscript/coverage_plots.pdf", coverage_curve_plot) 
+
+
+# purrr::map(coverage_plots, ~print(.x))
+```
+
+# stachelek 
+
+```{r, message = FALSE}
+per_base_depths <- fs::path(proj_dir, "output", "mosdepth") %>% 
+  dir_ls() %>% 
+  path_filter("*region.dist.txt") %>%
+  purrr::map(read_tsv, col_names = F) %>%
+  purrr::map(~set_names(.x, c("chr", "coverage", "percent_covered"))) %>%
+  identity()
+
+per_sample_depths <- fs::path(proj_dir, "output", "mosdepth") %>% 
+  dir_ls(glob = "*summary.txt") %>%
+  purrr::map(read_tsv) %>%
+  purrr::set_names(fs::path_file(names(.))) %>%
+  dplyr::bind_rows(.id = "sample_id") %>% 
+  dplyr::filter(chrom == "total_region") %>%
+  dplyr::rename(region_coverage = mean) %>% 
+  dplyr::mutate(sample_id = str_replace(sample_id, "_.*", "")) %>% 
+  dplyr::mutate(sample_type = case_when(grepl("-T", sample_id) ~ "Tumor",
+                                        grepl("-CL", sample_id) ~ "Cell Line",
+                                        grepl("-N", sample_id) ~ "Matched Normal",)) %>% 
+  split(.$sample_type) %>% 
+  identity()
+
+per_sample_depths <- per_sample_depths[c("Tumor", "Cell Line", "Matched Normal")]
+
+```
+
+# stachelek mean coverage
+
+```{r}
+
+find_samples <- function(mydf){
+  # browser()
+  cohort_dfs <- 
+    dplyr::group_by(mydf, sample_id) %>% 
+    dplyr::filter(row_number() == 1) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::summarize(mean_coverage = mean(region_coverage),
+                     median_coverage = median(region_coverage),
+                     sd_coverage = sd(region_coverage),
+                     num_samples = n_distinct(sample_id)) %>% 
+    identity()
+    
+  
+  return(cohort_dfs)
+}
+
+stachelek_coverage <- purrr::map(per_sample_depths, find_samples) %>% 
+  dplyr::bind_rows(.id = "sample_type") %>%
+  dplyr::mutate(sequencing_type = "WES") %>% 
+  identity()
+
+
+```
+
+```{r }
+boxplot_coverage <- function(coverage_df_list){
+  
+  coverage_df <- dplyr::bind_rows(coverage_df_list, .id = "cohort")
+  # browser()
+  coverage_box <- ggplot(coverage_df, aes(x = cohort, y = region_coverage)) + 
+    geom_boxplot() + 
+    theme_cowplot() +
+    ylim(0, 250) + 
+    coord_flip() + 
+    labs(x = NULL, y = "Coverage") +
+    NULL
+  
+  print(coverage_box)
+  
+  return(coverage_box)
+}
+
+coverage_boxplot <- boxplot_coverage(per_sample_depths) %>% 
+  identity()
+
+# ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_s01b.pdf", coverage_boxplot)
+```
+
+# combine fig S1A and fig S1B
+
+```{r }
+combined_plot <- cowplot::plot_grid(coverage_curve_plot, coverage_boxplot, labels = c("A", "E"), rel_widths = c(2,1))
+
+ggsave(fs::path(proj_dir, "doc/RB_exome_manuscript/stachelek_supplemental/fig_s01.pdf"), combined_plot, height = 12, width = 16)
+```
+
+# prior studies
+
+## zhang
+
+```{r}
+zhang_supp <- "~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/zhang_supp_info/tidy_format/zhang_coverage.csv" %>%
+  read_csv()
+```
+
+```{r}
+zhang_coverage <- 
+  zhang_supp %>% 
+  dplyr::filter(str_detect(Sample, ".*-D")) %>% 
+  dplyr::filter(Sample != "SJRB001-X") %>% 
+  dplyr::summarize(mean_coverage = mean(`Exon Coverage`),
+                   median_coverage = median(`Exon Coverage`),
+                   sd_coverage = sd(`Exon Coverage`),
+                   num_samples = n_distinct(Sample)) %>%
+  dplyr::mutate(sample_type = "Tumor") %>% 
+  dplyr::mutate(sequencing_type = "WGS") %>% 
+  identity()
+```
+
+## grobner
+
+```{r}
+cov_cols <- c("On target coverage (Tumor)", "On target coverage (Control)")
+
+grobner_supp <- "~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/grobner_supp_info/S_Table2.csv" %>% 
+  read_delim(delim = ";", skip = 3) %>% 
+  dplyr::filter(`Cancer Type` == "RB") %>% 
+  dplyr::filter(!is.na(`On target coverage (Tumor)`))
+```
+
+
+```{r}
+grobner_coverage <- 
+  grobner_supp %>% 
+  dplyr::mutate_at(cov_cols, ~as.numeric(gsub("x", "", .))) %>%
+  tidyr::gather(`On target coverage (Tumor)`, `On target coverage (Control)`, key = "sample_type", value = "coverage") %>% 
+  dplyr::mutate(sample_type = ifelse(grepl("Tumor", sample_type), "Tumor", "Normal")) %>% 
+  dplyr::filter(sample_type == "Tumor") %>% 
+  dplyr::group_by(sample_type) %>% 
+  dplyr::summarize(mean_coverage = mean(coverage),
+                   median_coverage = median(coverage),
+                   sd_coverage = sd(coverage),
+                   num_samples = n_distinct(Sample)) %>%
+  dplyr::mutate(sequencing_type = "WES") %>% 
+  identity()
+  
+```
+
+## mcevoy 
+
+```{r }
+mcevoy_supp <- "~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/mcevoy_supp_info/tidy_format/mcevoy_quality_scores.csv" %>% 
+  read_csv()
+```
+
+
+```{r }
+mcevoy_coverage <-
+  mcevoy_supp %>% 
+  dplyr::summarize(mean_coverage = mean(`Exon Coverage`),
+                   median_coverage = median(`Exon Coverage`),
+                   sd_coverage = sd(`Exon Coverage`),
+                   num_samples = n_distinct(Patient)) %>%
+  dplyr::mutate(sample_type = "Tumor") %>%
+  dplyr::mutate(sequencing_type = "WGS") %>%
+  identity()
+```
+
+
+## kooi
+
+```{r }
+kooi_supp <- "~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/rb_variants_kooi_supp_info/tidy_format/seq_qc_by_sample_kooi.csv" %>% 
+  read_csv()
+```
+
+
+```{r }
+kooi_coverage <- 
+  kooi_supp %>% 
+  dplyr::summarize(mean_coverage = mean(MEAN_TARGET_COVERAGE), 
+                   median_coverage = median(MEAN_TARGET_COVERAGE), 
+                   sd_coverage = sd(MEAN_TARGET_COVERAGE),
+                   num_samples = n_distinct(id)) %>% 
+  dplyr::mutate(sample_type = "Tumor") %>% 
+  dplyr::mutate(sequencing_type = "WES") %>% 
+  identity()
+  
+```
+
+## calc vaf var num per study
+
+```{r }
+vaf_per_study <- 
+  all_author_variants %>% 
+  group_by(author) %>% 
+  summarize(VAF = mean(VAF))
+
+vars_per_study <- 
+  all_author_variants %>% 
+  dplyr::group_by(author, sample) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(author) %>% 
+  dplyr::summarize(var = mean(n))
+
+var_vaf_per_study <- dplyr::left_join(vaf_per_study, vars_per_study, by  = "author")
+```
+
+## plot vaf distribution by sequencing study
+
+## plot vaf distribution per study
+
+```{r }
+all_author_variants <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_s01.csv") %>% 
+  dplyr::mutate(author = str_replace(author, " et al.", ""))
+
+vaf_per_study_box_plot <- ggplot(all_author_variants, aes(x = author, y = VAF, label = sample)) + 
+  scale_y_log10() + 
+  geom_boxplot() + 
+  labs(x = 'Study', y = 'Variant Allele Frequency') + 
+  # geom_text_repel(color = "red", cex = 2.5) +
+  cowplot::theme_cowplot() + 
+  NULL
+
+vars_per_study_box_plot <- 
+  all_author_variants %>%
+  dplyr::group_by(author, sample) %>% 
+  dplyr::count() %>% 
+  ggplot(aes(x = author, y = n, label = sample)) + 
+  scale_y_log10() + 
+  geom_boxplot() + 
+  labs(x = 'Study', y = 'Variants/Sample') + 
+  # geom_text_repel(color = "red", cex = 2.5) +
+  cowplot::theme_cowplot() + 
+  NULL
+
+study_comparison_plots <- vaf_per_study_box_plot + vars_per_study_box_plot +
+  plot_annotation(tag_levels = "A")
+
+ggsave("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/fig_05.pdf", study_comparison_plots, height = 6, width = 10)
+```
+
+# output
+
+```{r }
+total_coverage <- list(
+  "Kooi et al." = kooi_coverage,
+  "Grobner et al." = grobner_coverage,
+  "Zhang et al." = zhang_coverage,
+  "McEvoy et al." = mcevoy_coverage,
+  "Stachelek et al." = stachelek_coverage
+) %>%
+  dplyr::bind_rows(.id = "Study") %>%
+  dplyr::left_join(var_vaf_per_study, by  = "author") %>%
+  identity()
+
+colnames(total_coverage) = c("Study", "Mean Coverage", "Median Coverage", "SD Coverage", "Number of Samples", "Sample Type", "Sequencing Type")
+
+write_csv(total_coverage, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/table_03.csv"))
+
+```

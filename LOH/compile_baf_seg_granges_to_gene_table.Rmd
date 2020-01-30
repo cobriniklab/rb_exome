@@ -1,0 +1,94 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+
+library(reshape2)
+library(tidyverse)
+library(data.table)
+library(karyoploteR)
+library(purrr)
+library(scales)
+library(biobroom)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene #shorthand (for convenience)
+library(org.Hs.eg.db)
+library(plyranges)
+library(RaggedExperiment)
+library(CNVRanger)
+library(plyranges)
+```
+
+```{r}
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+gns <- genes(txdb, columns = c("GENEID"))
+
+# myGeneSymbols <- select(org.Hs.eg.db,
+#                         keys = c("INO80","NASP","INO80D","SMARCA1"),
+#                         columns = c("SYMBOL","ENTREZID"),
+#                         keytype = "SYMBOL")
+
+
+gns <- plyranges::mutate(gns, symbol = AnnotationDbi::select(org.Hs.eg.db, keys = as.character(gns$GENEID), columns = "SYMBOL", keytype = "ENTREZID"))
+  
+strand(gns) <- "*"
+
+```
+
+# find gene-specific overlap
+
+```{r}
+# qreduceAssay(ragexp, query, simplifyReduce = weightedmean)
+find_LOH_gene_overlaps <- function(my_grl, known_genes){
+  
+  drop_cols <- c("StartSNP", "EndSNP", "HetRate", "MedianLogRratio", "BpSize", "NbrSNPsMBAF", "NbrSNPsFull", "GENEID", "symbol.ENTREZID")
+  
+  gene_based_SCNA <- purrr::map(my_grl, function(x) {
+    gene_scnas <- biobroom::tidy.GRanges(find_overlaps(known_genes, x)) %>% 
+      dplyr::select(SYMBOL = symbol.SYMBOL, everything()) %>% 
+      dplyr::arrange(seqname)  %>% 
+      dplyr::select(-one_of(drop_cols)) %>%
+      dplyr::group_by(SYMBOL) %>% 
+      dplyr::filter(row_number() == 1) %>% 
+      tidyr::spread(Assay, mBAF) %>% 
+      identity()
+  })
+  
+  join_cols = head(colnames(gene_based_SCNA[[1]]), -1)
+
+  gene_based_SCNA <- gene_based_SCNA %>%
+    purrr::reduce(full_join, by = join_cols) %>%
+    dplyr::arrange(seqname, start) %>% 
+      identity()
+}
+
+
+```
+
+# process baf granges
+
+```{r}
+vc_baf_granges <- readRDS("~/rb_pipeline/doc/LOH/LOH_vc_granges.rds")
+reynolds_baf_granges <- readRDS("~/rb_pipeline/doc/LOH/LOH_reynolds_granges.rds")
+
+baf_granges <- c(vc_baf_granges, reynolds_baf_granges)
+
+gene_lohs <- find_LOH_gene_overlaps(baf_granges, gns) %>% 
+  dplyr::select(-names)
+
+write_csv(gene_lohs, fs::path("~/rb_pipeline/doc/RB_exome_manuscript/stachelek_supplemental/", "table_s09.csv"))
+```
+

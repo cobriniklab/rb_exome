@@ -1,0 +1,77 @@
+---
+title: "R Notebook"
+author: "Kevin Stachelek"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(janitor)
+library('tidyverse')
+ library('fs')
+ library('rprojroot')
+
+
+
+```
+
+```{r}
+path_to_xlsx <- "../doc/grobner_supp_info/nature25480-s3.xlsx"
+
+# This Excel file has 4 sheets. The names of the sheets are read by excel_sheets.
+
+sheet_names <- readxl::excel_sheets(path_to_xlsx)
+
+# Now we import all excel sheets into one list.
+
+sheets <- purrr::map(sheet_names, ~ readxl::read_excel(path_to_xlsx, sheet = .x))
+
+# We get a list of 4 data.frames or tibbles. Let’s name them.
+
+base::names(sheets) <- sheet_names
+
+# Now export all tibbles from the list to separate CSVs in one go.
+
+purrr::iwalk(sheets, ~ readr::write_excel_csv2(x = .x, path = paste0("../doc/grobner_supp_info/", .y, ".csv")))
+
+list.files(pattern = "\\.csv$")
+#> [1] "chickwts.csv" "iris.csv"     "mtcars.csv"   "quakes.csv"
+```
+
+```{r}
+gd <- grobner_dir <- "../doc/grobner_supp_info"
+
+
+grobner_csvs <- path(gd) %>% 
+  dir_ls() %>% 
+  path_filter("*.csv") %>% 
+  set_names(gsub("S.*S_","", .))
+
+read_grobner <- partial(read_delim, delim = ";", skip = 2)
+
+grobner_supp <- map(grobner_csvs, read_grobner)
+
+temming_rb_samples <- grobner_supp$Table3.csv %>% 
+  filter(`Cancer Type` == "RB") %>%
+  filter(!grepl("SJ", Sample)) %>% 
+  pull(Sample)
+
+signif_somatic_vars <- grobner_supp$Table9.csv %>% 
+  dplyr::select(Gene, `Biological Process`, one_of(temming_rb_samples)) %>% 
+  dplyr::mutate(samples_mutated = rowSums(select(., one_of(temming_rb_samples)))) %>% 
+  select(Gene, samples_mutated, everything())
+
+write_csv(signif_somatic_vars, "~/rb_pipeline/doc/grobner_supp_info/rb_variants_processed.csv")
+
+
+
+```
+
+
+
+

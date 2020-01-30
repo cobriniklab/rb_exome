@@ -1,0 +1,286 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, echo = F}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+```
+
+```{r load-packages}
+library(glue)
+library(fs)
+library(rprojroot)
+library(tidyverse)
+library(org.Hs.eg.db)
+proj_dir = rprojroot::find_root(criterion = has_file_pattern("*.Rproj"))
+```
+
+# 4. compile list of variants from all prior studies (Kooi, Zhang, McEvoy, Grobner w/o St. Jude Pecan
+
+### load supplemental files 
+
+```{r rb_exome18}
+zhang_supp_info <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/zhang_supp_info/tidy_format/variant_summary.csv")
+
+kooi_supp_info <-  read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/rb_variants_kooi_supp_info/tidy_format/variant_summary_kooi.csv")
+
+mcevoy_supp_info <-  read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/mcevoy_supp_info/tidy_format/validated_tier-1_mutations_for_all_ten_retinoblastomas_snvs.csv")
+
+grobner_supp_info <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/grobner_supp_info/rb_variants_processed.csv")
+
+pecan_supp_info <- read_tsv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/st_jude_pecan_supp_info/heatmap.tsv")
+
+
+```
+
+### clean supp info from prior studies
+
+```{r }
+# count samples
+n_zhang <- length(unique(zhang_supp_info$Sample))
+
+  zhang_vars <- 
+    zhang_supp_info %>% 
+    janitor::clean_names() %>% 
+    dplyr::mutate(VAF = number_mutant_in_tumor/(number_total_in_tumor), author = "zhang et al.") %>%
+  dplyr::select(class, chr, ref = reference_allele, alt = mutant_allele, gene = "nearest_gene", sample, VAF, author, hg18_pos) %>%
+  dplyr::mutate(gene = ifelse(grepl("V\\$", class), class, gene)) %>%
+  dplyr::mutate(gene = gsub("^V\\$|_.*$", "", gene)) %>%
+  dplyr::select(chr, hg18_pos, ref, alt, gene, VAF, author, sample) %>%
+  dplyr::filter(sample != "SJRB001XG") %>%
+  identity()
+```
+
+```{r }
+
+# count samples
+n_kooi <- length(unique(kooi_supp_info$ID))
+
+kooi_vars <- 
+  kooi_supp_info %>% 
+  janitor::clean_names() %>%
+  dplyr::select(chr, start, end, ref, alt = obs, gene, VAF = vaf, sample = id, Consequence = exonic_func) %>%
+  dplyr::mutate(author = "kooi et al.", start = as.character(start), end = as.character(end)) %>%
+  # dplyr::select(start, end, chr, ref, alt, gene, VAF, author, sample) %>%
+  identity()
+```
+
+```{r }
+
+# count samples
+n_mcevoy <- length(unique(mcevoy_supp_info$sample))
+
+mcevoy_vars <- 
+  mcevoy_supp_info %>% 
+  janitor::clean_names() %>%
+  dplyr::select(chr = chromosome, start = pos, "genotype_ref_non_ref", gene, "non_ref_allele_counts", "ref_allele_counts", sample, Consequence = class) %>%
+  mutate(chr = paste0("chr", chr)) %>% 
+  dplyr::mutate(end = NA, VAF = non_ref_allele_counts/(non_ref_allele_counts + ref_allele_counts)) %>%
+  dplyr::select(-c(non_ref_allele_counts, ref_allele_counts)) %>%
+  tidyr::separate(genotype_ref_non_ref, c("ref", "alt"), sep = "/") %>%
+  dplyr::mutate(author = "mcevoy et al.", start = as.character(start), end = as.character(end)) %>%
+  dplyr::select(start, end, chr, ref, alt, gene, VAF, author, sample, Consequence) %>%
+  identity()
+```
+
+```{r }
+
+grobner_vars <- 
+  grobner_supp_info %>% 
+  janitor::clean_names() %>%
+  gather("sample", "mutated", starts_with("RB_")) %>%
+  dplyr::filter(mutated == 1) %>%
+  mutate(author = "gröbner et al.") %>%
+  dplyr::select(sample, gene, author) %>%
+  identity()
+
+# count samples
+n_grobner <- length(unique(grobner_vars$sample))
+
+grobner_locations <- AnnotationDbi::select(org.Hs.eg.db, keys = grobner_vars$gene, keytype = "SYMBOL", columns = c("SYMBOL", "MAP"))
+
+grobner_vars <- dplyr::left_join(grobner_vars, grobner_locations, by = c("gene" = "SYMBOL")) %>% 
+  tidyr::separate(MAP, c("chrom", "pos"), sep = "p|q") %>%
+  dplyr::mutate(chr = paste0("chr", chrom)) %>% 
+  dplyr::select(-c(chrom, pos)) %>% 
+  identity()
+
+muts_per_mb <-
+  read_delim("../doc/RB_exome_manuscript/prior_studies/grobner_supp_info/S_Table3.csv", delim = ";", skip = 2) %>% 
+  dplyr::filter(`Cancer Type` == "RB") %>% 
+  dplyr::summarize(mutation_rate = mean(`Total Mutations Per Mb`))
+
+```
+
+```{r }
+
+pecan_vars <- 
+  pecan_supp_info %>% 
+  dplyr::filter(!grepl("Types|\\(", row_label)) %>% 
+  tidyr::gather("sample", "type", -row_label) %>% 
+  dplyr::mutate(sample = gsub("0;;", "", sample)) %>% 
+  dplyr::filter(!is.na(type)) %>% 
+  identity()
+
+# count samples
+n_pecan <- length(unique(pecan_vars$sample))
+
+pecan_locations <- AnnotationDbi::select(org.Hs.eg.db, keys = pecan_vars$row_label, keytype = "SYMBOL", columns = c("SYMBOL", "MAP"))
+
+pecan_vars <- dplyr::left_join(pecan_vars, pecan_locations, by = c("row_label" = "SYMBOL")) %>% 
+  tidyr::separate(MAP, c("chrom", "pos"), sep = "p|q") %>%
+  dplyr::mutate(chr = paste0("chr", chrom)) %>% 
+  dplyr::select(-c(chrom, pos, type)) %>% 
+  mutate(author = "st.jude") %>%
+  dplyr::rename(gene = row_label) %>% 
+  identity()
+```
+
+### prior author variants
+
+```{r rb_exome20}
+prior_author_variants <- list(
+  "zhang et al." = zhang_vars, 
+  "kooi et al." = kooi_vars,
+  "mcevoy et al." = mcevoy_vars,
+  "grobner et al." = grobner_vars
+  # "pecan" = pecan_vars,
+)
+  
+prior_author_variants <- dplyr::bind_rows(prior_author_variants) %>% 
+  dplyr::mutate(start = as.numeric(start), end = as.numeric(end)) %>% 
+  dplyr::select(chr, start, end, hg18_pos, ref, alt, gene, VAF, author, sample, Consequence) %>%
+  dplyr::distinct() %>%
+  dplyr::arrange(gene) %>% 
+  dplyr::filter(!is.na(gene)) %>% 
+  dplyr::select(gene, sample, author, VAF, Consequence, everything()) %>% 
+  identity()
+
+write_csv(prior_author_variants, "../doc/RB_exome_manuscript/SNV/prior_author_variants.csv")
+```
+
+## prior scna 
+
+```{r }
+gene_marker_granges <- genes(txdb)[c('54880', '4613', '5925')]
+names(gene_marker_granges) <- c("BCOR", "MYCN", "RB1")
+
+seqlevelsStyle(gene_marker_granges) <- "Ensembl"
+```
+
+## kooi scna
+
+```{r }
+kooi_scna <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/rb_variants_kooi_supp_info/tidy_format/SCNA_segments_kooi.csv") %>% 
+  janitor::clean_names() %>%
+  # dplyr::filter(refseq_symbol %in% c("BCOR", "RB1", "MYCN")) %>%
+  identity()
+
+kooi_scna <- 
+  kooi_scna %>% 
+  dplyr::mutate(chrom = case_when(chrom == "23" ~ "X",
+                                  chrom == "24" ~ "Y",
+                                  TRUE ~ as.character(chrom))) %>% 
+  dplyr::rename(seqnames = chrom, start = loc_start, end = loc_end) %>%
+  plyranges::as_granges() %>%
+  find_overlaps(gene_marker_granges) %>%
+  as_tibble() %>%
+  dplyr::mutate(absolute_cn = 2*2^(seg_mean), author = "kooi et al.") %>%
+  dplyr::filter((seqnames %in% c("X", "13") & absolute_cn < 1.0) | (seqnames == "2" & absolute_cn > 2.5)) %>% 
+  identity()
+
+
+```
+
+## mcevoy scna
+
+```{r }
+mcevoy_scna <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/mcevoy_supp_info/tidy_format/individual_whole_chromosome_gains_and_losses_per_sample.csv") %>% 
+  janitor::clean_names() %>%
+  tidyr::drop_na(absolute_cn) %>% 
+  tidyr::fill(sample) %>% 
+  dplyr::filter((chromosome %in% c("X", "13") & absolute_cn < 1.9) | (chromosome == "2" & absolute_cn > 2.5)) %>% 
+  dplyr::mutate(gene_id = case_when(chromosome == "2" ~ "4613",
+                                    chromosome == "13" ~ "5925",
+                                    chromosome == "X" ~ "54880")) %>% 
+  dplyr::mutate(author = "mcevoy et al.") %>% 
+  identity()
+
+```
+
+## zhang scna
+
+```{r }
+zhang_scna <- read_csv("~/rb_pipeline/doc/RB_exome_manuscript/prior_studies/zhang_supp_info/tidy_format/gain_loss_census.csv") %>% 
+  janitor::clean_names() %>%
+  dplyr::filter(symbol %in% c("BCOR", "RB1", "MYCN")) %>% 
+  # dplyr::filter(refseq_symbol %in% c("BCOR", "RB1", "MYCN")) %>%
+  identity()
+
+```
+
+## prior scna
+
+```{r }
+
+gene_map <- names(gene_marker_granges)
+names(gene_map) <- gene_marker_granges$gene_id
+
+mcevoy_scna <- 
+  mcevoy_scna %>% 
+  dplyr::rename(seqnames = chromosome, id = sample)
+
+prior_scna <- 
+  dplyr::bind_rows(mcevoy_scna, kooi_scna) %>% 
+  dplyr::mutate(symbol = gene_map[gene_id]) %>% 
+  dplyr::select(id, symbol, chromosome = seqnames, seg_mean, copy_number = absolute_cn, author) %>%
+  identity()
+
+write_csv(prior_scna, "../doc/RB_exome_manuscript/SCNA/prior_author_scna.csv")
+
+```
+
+
+# private somatic variants 
+
+```{r }
+prior_scna <- read_csv("../doc/RB_exome_manuscript/SCNA/prior_author_scna.csv")
+
+prior_author_variants <- read_csv("../doc/RB_exome_manuscript/SNV/prior_author_variants.csv")
+
+bcor_deletions <- 
+  prior_scna  %>% 
+  dplyr::filter(symbol == "BCOR") %>% 
+  dplyr::n_distinct(id) %>%
+  identity()
+
+bcor_snv <- prior_author_variants %>% 
+  dplyr::filter(gene == "BCOR") %>% 
+  dplyr::n_distinct(id) %>%
+  identity()
+
+crebbp_snv <- prior_author_variants %>% 
+  dplyr::filter(gene == "CREBBP") %>% 
+  dplyr::n_distinct(id) %>%
+  identity()
+  
+private_variants <- prior_author_variants %>% 
+  dplyr::filter(!gene %in% c("BCOR", "CREBBP")) %>% 
+  dplyr::distinct(gene) %>% # sample, chr, start, end, ref, alt
+  # dplyr::filter(n == 1) %>%
+  identity()
+
+n_private <- private_variants %>% 
+  nrow() %>%
+  # dim(private_variants)[1] %>% 
+  identity()
+
+glue("Past whole exome or whole genome sequencing of 117  retinoblastomas revealed recurrent mutations or focal deletion in BCOR (in {bcor_deletions + bcor_snv}) and CREBBP (in {crebbp_snv}) (Table 3, 4), and {n_private} potentially pathogenic private somatic mutations in one of 117 samples ({round(n_private/117, 2)} per tumor")
+
+glue("In addition to recurrent SCNAs, whole genome or exome sequencing of 117 retinoblastomas revealed pathogenic mutation or focal deletion of BCOR in twelve, CREBBP variants in two, and potentially pathogenic variants of {n_private} genes thus far detected in only one sample (Grobner et al., 2018; Kooi et al., 2016b; Zhang et al., 2012, McEvoy et. al 2014; see table 3, 4).")
+
+
+```
+
+
