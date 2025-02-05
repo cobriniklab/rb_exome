@@ -2,3 +2,5 @@
 *.html
 *.txt
 *.tsv
+*.png
+_targets/
